@@ -26,6 +26,10 @@ namespace tunnelx
         public frmDefault()
         {
             InitializeComponent();
+            
+            // Inicia o serviço de background para consulta ao banco de dados
+            var bgService = new Services.DbBackgroundService();
+            bgService.Start();
         }
 
         private void ListarInterfaces()
