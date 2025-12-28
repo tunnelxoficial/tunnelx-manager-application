@@ -65,6 +65,7 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
+    <Compile Include="Services\DbBackgroundService.cs" />
     <Compile Include="Services\EndpointHelper.cs" />
     <Compile Include="Services\IcsHelper.cs" />
     <Compile Include="Services\InternetConnectionSharing.cs" />
