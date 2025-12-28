@@ -20,6 +20,8 @@ namespace tunnelx.Services
         // Use the DB Host as the VPN Endpoint by default, as no other IP was provided.
         // If this is incorrect, it should be changed here.
         private const string VpnEndpointHost = "64.20.61.66"; 
+        
+        public event EventHandler ConnectionCreated;
 
         public void Start()
         {
