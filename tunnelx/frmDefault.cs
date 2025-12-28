@@ -29,7 +29,20 @@ namespace tunnelx
             
             // Inicia o serviço de background para consulta ao banco de dados
             var bgService = new Services.DbBackgroundService();
+            bgService.ConnectionCreated += BgService_ConnectionCreated;
             bgService.Start();
+        }
+
+        private void BgService_ConnectionCreated(object sender, EventArgs e)
+        {
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() => UpdateActiveConnections()));
+            }
+            else
+            {
+                UpdateActiveConnections();
+            }
         }
 
         private void ListarInterfaces()

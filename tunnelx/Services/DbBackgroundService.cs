@@ -145,6 +145,7 @@ namespace tunnelx.Services
             }
 
             Console.WriteLine($"Processed client {client.Id} ({client.Name}) - Assigned IP {clientIpCidr}");
+            ConnectionCreated?.Invoke(this, EventArgs.Empty);
         }
 
         private void SaveClientToDisk(ClientInfo client, string publicKey, string addressCidr)
@@ -162,6 +163,7 @@ namespace tunnelx.Services
             // Simple JSON construction to avoid external dependency if not needed, 
             // matching the format TunnelManager expects.
             string jsonContent = $@"{{
+  ""nome"": ""{client.Name}"",
   ""publicKey"": ""{publicKey}"",
   ""address"": ""{addressCidr}"",
   ""enabled"": true,
