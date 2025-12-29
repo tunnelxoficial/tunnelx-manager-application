@@ -132,9 +132,8 @@ namespace tunnelx.Services
             // 8. Update Database
             var updateSql = @"UPDATE Connections 
                               SET config = @config, 
-                                  qrcode = @qrcode, 
-                                  status_queue = 'CREATED',
-                                  status = 'active'
+                                  qrcode = @qrcode,
+                                  status_queue = 'CREATED'
                               WHERE id = @id";
 
             using (var cmd = new SqlCommand(updateSql, conn))
