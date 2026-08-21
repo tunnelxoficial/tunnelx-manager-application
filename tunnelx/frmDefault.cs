@@ -423,12 +423,11 @@ namespace tunnelx
                 Directory.CreateDirectory(clientDirRoot);
                 Directory.CreateDirectory(clientDir);
 
-                if (string.IsNullOrEmpty(TunnelManager.ServerPrivateKeyB64) ||
-                    string.IsNullOrEmpty(TunnelManager.ServerPublicKeyB64))
-                {
-                    TunnelManager.GenerateKeys();
-                    TunnelManager.WriteServerConf();
-                }
+                // Recupera a chave do servidor a partir do TunnelX.conf existente.
+                // NUNCA chamar GenerateKeys()+WriteServerConf() aqui: trocaria a
+                // identidade do servidor e o WriteServerConf reescreve o arquivo com
+                // apenas o peer Android fixo, apagando TODOS os clientes ja emitidos.
+                TunnelManager.EnsureServerKeys();
 
                 var clientKeyPair = tunnelx.Services.TunnelManager.WireGuardKeyGenerator.GenerateKeyPair();
                 var address = TunnelManager.AllocateClientAddress();
@@ -471,12 +470,9 @@ namespace tunnelx
                     Directory.CreateDirectory(clientDirRoot);
                     Directory.CreateDirectory(clientDir);
 
-                    if (string.IsNullOrEmpty(TunnelManager.ServerPrivateKeyB64) ||
-                        string.IsNullOrEmpty(TunnelManager.ServerPublicKeyB64))
-                    {
-                        TunnelManager.GenerateKeys();
-                        TunnelManager.WriteServerConf();
-                    }
+                    // Ver comentario equivalente em btGerarConfig: regenerar as chaves
+                    // aqui invalidaria todos os clientes ja emitidos.
+                    TunnelManager.EnsureServerKeys();
 
                     var clientKeyPair = tunnelx.Services.TunnelManager.WireGuardKeyGenerator.GenerateKeyPair();
                     var address = TunnelManager.AllocateClientAddress();

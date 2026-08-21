@@ -106,11 +106,23 @@ namespace tunnelx.Services
             /// <summary>
             /// Gera um par de chaves Curve25519 (X25519) compatível com WireGuard.
             /// </summary>
+            // RNG criptografico unico e thread-safe. Substitui o new Random() anterior,
+            // que era semeado por Environment.TickCount (~15 ms de resolucao): a chave
+            // privada era reproduzivel por forca bruta do seed, e dois pares gerados em
+            // sequencia imediata saiam IDENTICOS (servidor e peer Android).
+            private static readonly System.Security.Cryptography.RandomNumberGenerator _rng =
+                System.Security.Cryptography.RandomNumberGenerator.Create();
+
             public static (string PrivateKey, string PublicKey) GenerateKeyPair()
             {
-                // Gera 32 bytes aleatórios para a chave privada
+                // 32 bytes de entropia criptografica para a chave privada
                 byte[] privateKey = new byte[32];
-                new Random().NextBytes(privateKey);
+                _rng.GetBytes(privateKey);
+
+                // Clamping exigido pelo X25519 (mesmo tratamento que "wg genkey" aplica)
+                privateKey[0] &= 248;
+                privateKey[31] &= 127;
+                privateKey[31] |= 64;
 
                 // Deriva a chave pública correspondente
                 byte[] publicKey = MontgomeryCurve25519.GetPublicKey(privateKey);
@@ -406,6 +418,12 @@ PersistentKeepalive = 15
                 }
                 catch { }
             }
+            // 10.66.66.1 e o servidor (ServerAddress) e 10.66.66.2 e o peer Android fixo
+            // (AndroidAddress). Nenhum dos dois tem client.json, entao nao aparecem na
+            // varredura acima -- sem isso o PRIMEIRO cliente recebia .2 e colidia.
+            used.Add(1);
+            used.Add(2);
+
             for (int n = 2; n <= 254; n++)
             {
                 if (!used.Contains(n)) return $"10.66.66.{n}/32";
@@ -502,6 +520,25 @@ PersistentKeepalive = 15
             catch { }
             if (string.IsNullOrWhiteSpace(ServerPrivateKeyB64))
             {
+                // Se ja existem clientes emitidos, gerar um par novo troca a identidade
+                // do servidor e invalida todos eles de uma vez. Melhor falhar de forma
+                // visivel do que destruir a base em silencio.
+                bool haClientes = false;
+                try
+                {
+                    haClientes = Directory.Exists(ClientsDir) &&
+                                 Directory.GetDirectories(ClientsDir)
+                                          .Any(d => File.Exists(System.IO.Path.Combine(d, "client.json")));
+                }
+                catch { }
+
+                if (haClientes)
+                    throw new InvalidOperationException(
+                        "Chave privada do servidor nao encontrada em " + ServerConfPath +
+                        ", mas existem clientes emitidos em " + ClientsDir + ". " +
+                        "Gerar novas chaves invalidaria todos eles. " +
+                        "Restaure o TunnelX.conf a partir de backup antes de continuar.");
+
                 GenerateKeys();
             }
         }

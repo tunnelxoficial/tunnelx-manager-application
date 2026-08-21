@@ -4,6 +4,7 @@ using System.Data;
 using System.Data.SqlClient;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -109,12 +110,48 @@ namespace tunnelx.Services
             // 1. Ensure Server Keys exist
             TunnelManager.EnsureServerKeys();
 
+            // 1.1 Re-provisionamento: se ja existe pasta deste cliente, esta e uma
+            // regeracao (status_queue devolvido para WAIT pelo painel). Sem tratar isso,
+            // o peer antigo ficaria orfao no tunel e o IP antigo voltaria ao pool,
+            // podendo ser entregue a outro cliente -- colisao dentro de 10.66.66.0/24.
+            string oldPublicKey = null, oldAddress = null;
+            try
+            {
+                if (Directory.Exists(TunnelManager.ClientsDir))
+                {
+                    var dirAnterior = Directory.GetDirectories(TunnelManager.ClientsDir)
+                        .FirstOrDefault(d => Path.GetFileName(d).StartsWith(client.Id + "_"));
+
+                    if (dirAnterior != null)
+                    {
+                        var jsonAnterior = Path.Combine(dirAnterior, "client.json");
+                        if (File.Exists(jsonAnterior))
+                        {
+                            foreach (var linha in File.ReadAllLines(jsonAnterior))
+                            {
+                                var idx = linha.IndexOf(':');
+                                if (idx <= 0) continue;
+                                var valor = linha.Substring(idx + 1).Trim().Trim('"', ',', ' ');
+                                if (linha.IndexOf("\"publicKey\"", StringComparison.OrdinalIgnoreCase) >= 0) oldPublicKey = valor;
+                                else if (linha.IndexOf("\"address\"", StringComparison.OrdinalIgnoreCase) >= 0) oldAddress = valor;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("Falha ao ler estado anterior do cliente: " + ex.Message); }
+
+            if (!string.IsNullOrWhiteSpace(oldPublicKey))
+                TunnelManager.RemovePeer(oldPublicKey);
+
             // 2. Generate Client Keys
             var keys = TunnelManager.WireGuardKeyGenerator.GenerateKeyPair();
 
-            // 3. Allocate IP
-            // Note: This relies on existing client files in ClientsDir to avoid collisions.
-            string clientIpCidr = TunnelManager.AllocateClientAddress();
+            // 3. Allocate IP -- reaproveita o endereco anterior numa regeracao para nao
+            // consumir outro IP do pool a cada re-provisionamento.
+            string clientIpCidr = !string.IsNullOrWhiteSpace(oldAddress)
+                ? oldAddress
+                : TunnelManager.AllocateClientAddress();
 
             // 4. Build Config
             // Using the DB Host as the endpoint IP.
@@ -125,6 +162,11 @@ namespace tunnelx.Services
 
             // 6. Save to Disk (Essential for IP persistence and TunnelManager to find it)
             SaveClientToDisk(client, keys.PublicKey, clientIpCidr);
+
+            // 6.1 Persiste o peer no TunnelX.conf. Sem isto o cliente criado pela fila
+            // existe apenas em runtime (o wg set do passo 7) e no client.json, e some
+            // no proximo restart do servico do tunel ou reboot do servidor.
+            TunnelManager.WriteServerConfFromClients();
 
             // 7. Add Peer to Running Tunnel (if active)
             TunnelManager.AddPeer(keys.PublicKey, clientIpCidr);

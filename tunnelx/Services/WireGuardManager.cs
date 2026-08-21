@@ -77,17 +77,32 @@ namespace tunnelx.Services
             // segue mesmo se não detectou; WireGuard pode demorar mais um pouco
         }
 
+        // Mesma correcao aplicada em frmDefault.IsTunnelActive: adaptadores WinTun
+        // (usados pelo WireGuard) nao aparecem em Win32_NetworkAdapter com
+        // NetConnectionStatus = 2, entao a consulta WMI retornava sempre false e o
+        // WaitForInterfaceUp esgotava o timeout mesmo com o tunel no ar.
         private static bool IsInterfaceConnected(string connectionId)
         {
-            var q = new ManagementObjectSearcher(
-                "SELECT * FROM Win32_NetworkAdapter WHERE NetConnectionStatus = 2");
-            foreach (ManagementObject o in q.Get())
+            try
             {
-                var name = o["NetConnectionID"]?.ToString();
-                if (string.Equals(name, connectionId, StringComparison.OrdinalIgnoreCase))
+                var nic = System.Net.NetworkInformation.NetworkInterface
+                    .GetAllNetworkInterfaces()
+                    .FirstOrDefault(n => string.Equals(n.Name, connectionId, StringComparison.OrdinalIgnoreCase));
+
+                if (nic != null && nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up)
                     return true;
             }
-            return false;
+            catch { }
+
+            try
+            {
+                using (var svc = new System.ServiceProcess.ServiceController("WireGuardTunnel" + "$" + connectionId))
+                    return svc.Status == System.ServiceProcess.ServiceControllerStatus.Running;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void EnableIcs(string internetIfName, string tunnelIfName)
