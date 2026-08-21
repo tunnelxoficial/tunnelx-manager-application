@@ -17,9 +17,10 @@ namespace tunnelx.Services
         // Using the provided credentials. Assuming MSSQL based on library availability and schema comments.
         private const string ConnectionString = "Server=64.20.61.66;Database=tunnelx;User Id=tunnelx;Password=TuNn3Lx2@25;";
         
-        // Use the DB Host as the VPN Endpoint by default, as no other IP was provided.
-        // If this is incorrect, it should be changed here.
-        private const string VpnEndpointHost = "64.20.61.66"; 
+        // Endpoint publico entregue no .conf do cliente. Antes era uma constante
+        // com o IP do SERVIDOR DE BANCO, o que gerava configuracoes que nunca
+        // conectavam. Agora vem de App.config -> appSettings/VpnEndpointHost.
+        private static string VpnEndpointHost { get { return TunnelManager.PublicEndpointHost; } }
         
         public event EventHandler ConnectionCreated;
 

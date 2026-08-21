@@ -26,6 +26,49 @@ namespace tunnelx.Services
         public const int DefaultMtu = 1420;
         public static string ClientsDir => System.IO.Path.Combine(ConfDir, "clients");
 
+        // === ENDPOINT PUBLICO / COMPARTILHAMENTO DE INTERNET ===
+        // Host (IP ou DNS) que os clientes usam no campo Endpoint do .conf.
+        // Ajustavel em App.config -> appSettings/VpnEndpointHost, sem recompilar.
+        public static string PublicEndpointHost
+        {
+            get
+            {
+                var v = System.Configuration.ConfigurationManager.AppSettings["VpnEndpointHost"];
+                return string.IsNullOrWhiteSpace(v) ? "tunnelx.ddns.net" : v.Trim();
+            }
+        }
+
+        // Quando false, o compartilhamento de internet e feito fora do app
+        // (WinNAT via New-NetNat, ou RRAS) e o ICS do Windows NAO e acionado.
+        // O ICS reescreve a interface do tunel para 192.168.137.1/24, o que
+        // conflita com ServerAddress (10.66.66.1/24) e derruba todos os peers.
+        public static bool UseIcs
+        {
+            get
+            {
+                bool b;
+                return bool.TryParse(System.Configuration.ConfigurationManager.AppSettings["UseIcs"], out b) && b;
+            }
+        }
+
+        // Host usado no Endpoint do .conf do cliente. Prioriza a configuracao e
+        // so cai na deteccao automatica se ela estiver vazia. A deteccao por IPv6
+        // vinha primeiro e gerava Endpoint = [ipv6]:51820, inacessivel para
+        // clientes sem IPv6 -- por isso aqui o IPv4 e o fallback preferido.
+        public static string ResolveClientEndpointHost()
+        {
+            var configured = PublicEndpointHost;
+            if (!string.IsNullOrWhiteSpace(configured))
+                return configured;
+
+            var v4 = NetworkHelper.GetPublicIp();
+            if (!string.IsNullOrWhiteSpace(v4) && v4 != "0.0.0.0")
+                return v4;
+
+            var v6 = NetworkHelper.GetPublicIpv6();
+            return string.IsNullOrWhiteSpace(v6) ? "0.0.0.0" : "[" + v6 + "]";
+        }
+
         // Defina o nome da interface REAL de Internet e a interface do túnel (WireGuard)
         public static string InternetInterfaceName = ""; // ou "Wi-Fi"
 
@@ -144,8 +187,12 @@ AllowedIPs = {AndroidAddress}
         // === PASSO 4: Ativar ICS (NAT) Internet -> WireGuard (COM HNetCfg.HNetShare) ===
         public static void EnableIcsSharing(string internetInterface, string localInterface)
         {
+            if (!UseIcs)
+            {
+                Console.WriteLine("ICS desativado (App.config UseIcs=false). Compartilhamento via WinNAT/RRAS.");
+                return;
+            }
             IcsHelper.EnableSharing(internetInterface, localInterface);
-
         }
 
         // === PASSO 5: Subir o túnel (executa wireguard.exe diretamente, sem shell) ===

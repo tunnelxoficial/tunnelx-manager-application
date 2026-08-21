@@ -105,15 +105,8 @@ namespace tunnelx
                     TunnelManager.WriteServerConfFromClients();
                     TunnelManager.ReloadTunnel();
 
-                    string endpointPublic = NetworkHelper.GetPublicIpv6();
-                    string androidConf = "";
-                    if (!string.IsNullOrEmpty(endpointPublic))
-                        androidConf = TunnelManager.BuildAndroidPeerConf("[" + endpointPublic + "]");
-                    else
-                    {
-                        endpointPublic = NetworkHelper.GetPublicIp();
-                        androidConf = TunnelManager.BuildAndroidPeerConf(endpointPublic);
-                    }
+                    string endpointPublic = TunnelManager.ResolveClientEndpointHost();
+                    string androidConf = TunnelManager.BuildAndroidPeerConf(endpointPublic);
                     File.WriteAllText(Path.Combine(TunnelManager.ConfDir, "android-peer.conf"), androidConf);
                     var png = TunnelManager.BuildAndroidPeerQrPng(androidConf);
                     File.WriteAllBytes(Path.Combine(TunnelManager.ConfDir, "android-peer.png"), png);
@@ -134,14 +127,15 @@ namespace tunnelx
                     TunnelManager.InstallAndStartTunnelService();
                     TunnelManager.ReloadTunnel();
 
-                    string endpointPublic = NetworkHelper.GetPublicIpv6();
-                    string androidConf = TunnelManager.BuildAndroidPeerConf("[" + endpointPublic + "]");
+                    string endpointPublic = TunnelManager.ResolveClientEndpointHost();
+                    string androidConf = TunnelManager.BuildAndroidPeerConf(endpointPublic);
                     File.WriteAllText(Path.Combine(TunnelManager.ConfDir, "android-peer.conf"), androidConf);
                     var png = TunnelManager.BuildAndroidPeerQrPng(androidConf);
                     File.WriteAllBytes(Path.Combine(TunnelManager.ConfDir, "android-peer.png"), png);
                 }
 
-                WireGuardManager.ApplyWifiToTunnelx(SelectedInterfaceName, "TunnelX");
+                if (TunnelManager.UseIcs)
+                    WireGuardManager.ApplyWifiToTunnelx(SelectedInterfaceName, "TunnelX");
                 TunnelCreated = true;
                 MessageBox.Show("TunnelX aberto com sucesso!", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 DialogResult = DialogResult.OK;

@@ -124,17 +124,31 @@ namespace tunnelx
             }
         }
 
+        // Detecta o tunel pelo adaptador de rede e, como reforco, pelo servico do
+        // WireGuard. A consulta WMI anterior (Win32_NetworkAdapter com
+        // NetConnectionStatus = 2) nao enxerga adaptadores WinTun: retornava
+        // sempre false e mantinha btStop/btGerarQr/btGerarConfig invisiveis,
+        // tornando impossivel criar cliente pela tela.
         private bool IsTunnelActive(string tunnelName = "TunnelX")
         {
-            var query = "SELECT * FROM Win32_NetworkAdapter WHERE NetConnectionStatus = 2";
-            using (var searcher = new ManagementObjectSearcher(query))
+            try
             {
-                foreach (ManagementObject adapter in searcher.Get())
-                {
-                    var name = adapter["NetConnectionID"]?.ToString();
-                    if (string.Equals(name, tunnelName, StringComparison.OrdinalIgnoreCase))
-                        return true;
-                }
+                var nic = System.Net.NetworkInformation.NetworkInterface
+                    .GetAllNetworkInterfaces()
+                    .FirstOrDefault(n => string.Equals(n.Name, tunnelName, StringComparison.OrdinalIgnoreCase));
+
+                if (nic != null && nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up)
+                    return true;
+            }
+            catch { }
+
+            try
+            {
+                using (var svc = new System.ServiceProcess.ServiceController("WireGuardTunnel" + "$" + tunnelName))
+                    return svc.Status == System.ServiceProcess.ServiceControllerStatus.Running;
+            }
+            catch
+            {
                 return false;
             }
         }
@@ -175,7 +189,7 @@ namespace tunnelx
         {
             try
             {
-                if (!string.IsNullOrWhiteSpace(TunnelManager.InternetInterfaceName))
+                if (TunnelManager.UseIcs && !string.IsNullOrWhiteSpace(TunnelManager.InternetInterfaceName))
                     WireGuardManager.ApplyWifiToTunnelx(TunnelManager.InternetInterfaceName, TunnelManager.WireGuardInterfaceName);
                 TunnelManager.WriteServerConfFromClients();
                 TunnelManager.ReloadTunnel();
@@ -419,15 +433,8 @@ namespace tunnelx
                 var clientKeyPair = tunnelx.Services.TunnelManager.WireGuardKeyGenerator.GenerateKeyPair();
                 var address = TunnelManager.AllocateClientAddress();
 
-                string endpointPublic = NetworkHelper.GetPublicIpv6();
-                string conf;
-                if (!string.IsNullOrEmpty(endpointPublic))
-                    conf = TunnelManager.BuildClientConf(clientKeyPair.PrivateKey, address, "[" + endpointPublic + "]");
-                else
-                {
-                    endpointPublic = NetworkHelper.GetPublicIp();
-                    conf = TunnelManager.BuildClientConf(clientKeyPair.PrivateKey, address, endpointPublic);
-                }
+                string endpointPublic = TunnelManager.ResolveClientEndpointHost();
+                string conf = TunnelManager.BuildClientConf(clientKeyPair.PrivateKey, address, endpointPublic);
 
                 var path = Path.Combine(clientDir, "client-peer.conf");
                 File.WriteAllText(path, conf);
@@ -474,15 +481,8 @@ namespace tunnelx
                     var clientKeyPair = tunnelx.Services.TunnelManager.WireGuardKeyGenerator.GenerateKeyPair();
                     var address = TunnelManager.AllocateClientAddress();
 
-                    string endpointPublic = NetworkHelper.GetPublicIpv6();
-                    string conf;
-                    if (!string.IsNullOrEmpty(endpointPublic))
-                        conf = TunnelManager.BuildClientConf(clientKeyPair.PrivateKey, address, "[" + endpointPublic + "]");
-                    else
-                    {
-                        endpointPublic = NetworkHelper.GetPublicIp();
-                        conf = TunnelManager.BuildClientConf(clientKeyPair.PrivateKey, address, endpointPublic);
-                    }
+                    string endpointPublic = TunnelManager.ResolveClientEndpointHost();
+                    string conf = TunnelManager.BuildClientConf(clientKeyPair.PrivateKey, address, endpointPublic);
 
                     var png = TunnelManager.BuildAndroidPeerQrPng(conf);
                     var pathPng = Path.Combine(clientDir, "client-peer.png");

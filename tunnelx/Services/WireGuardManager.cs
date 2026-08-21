@@ -36,7 +36,11 @@ namespace tunnelx.Services
             WaitForInterfaceUp(tunnelIfName, 10_000);
 
             // 5) (Recomendado) Aplica ICS: Wi-Fi (PUBLIC) → TunnelX (PRIVATE)
-            EnableIcs(internetIfName, tunnelIfName);
+            // ICS apenas quando explicitamente habilitado (App.config -> UseIcs).
+            // Com UseIcs=false o compartilhamento fica a cargo do WinNAT/RRAS e o
+            // ICS nao reescreve a TunnelX para 192.168.137.1/24.
+            if (TunnelManager.UseIcs)
+                EnableIcs(internetIfName, tunnelIfName);
 
             // 6) (Opcional) Abre porta UDP no firewall
             RunAdmin($@"netsh advfirewall firewall add rule name=""WireGuard UDP {wgPortUdp}"" dir=in action=allow protocol=UDP localport={wgPortUdp}");
@@ -44,7 +48,7 @@ namespace tunnelx.Services
             // 7) (Opcional) Força rota do /24 local do túnel (ajuste se usar outra sub-rede)
             RunAdmin($@"route add 10.66.66.0 mask 255.255.255.0 10.66.66.1 metric 1");
 
-            Console.WriteLine("✅ TunnelX reativado e ICS aplicado.");
+            Console.WriteLine("✅ TunnelX reativado.");
         }
 
         private static string FindWireGuardConfPath(string tunnelName)
