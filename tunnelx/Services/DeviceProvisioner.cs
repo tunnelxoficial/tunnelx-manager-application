@@ -208,7 +208,14 @@ namespace tunnelx.Services
             if (string.IsNullOrWhiteSpace(chaveAntiga)) return;
 
             Log.Info($"aparelho {deviceId}: removendo peer anterior antes de regerar");
-            TunnelManager.RemovePeer(chaveAntiga);
+            if (!TunnelManager.RemovePeer(chaveAntiga))
+            {
+                // Nao da para regerar por cima de um peer que continua no tunel: o
+                // antigo ficaria orfao segurando o IP, e o cliente teria dois peers
+                // com AllowedIPs conflitantes.
+                throw new InvalidOperationException(
+                    $"peer anterior do aparelho {deviceId} nao pode ser removido");
+            }
             ApagarDoDisco(deviceId);
         }
 
@@ -247,11 +254,27 @@ namespace tunnelx.Services
 
                 ApagarDoDisco(p.Item1);
 
-                // public_key a NULL e o sinal de "ja removido": sem isso a varredura
-                // acima pegaria a mesma linha para sempre.
+                /*
+                 * O UPDATE so vale se a linha AINDA estiver revogada.
+                 *
+                 * Entre o SELECT la em cima e este ponto passam dois processos
+                 * wg.exe por linha — segundos, com TOP (50). Nesse intervalo o
+                 * titular pode re-convidar a pessoa: garantirDevice limpa o
+                 * revoked_at e devolve o aparelho para a fila com WAIT.
+                 *
+                 * Sem a condicao, este UPDATE atropelaria essa reativacao e
+                 * gravaria REVOKED com config nula. Como a reivindicacao so pega
+                 * WAIT, o aparelho ficaria parado para sempre: peer ja removido do
+                 * tunel, convite ativo, e o convidado em "preparando" sem fim.
+                 *
+                 * O estado e REVOKED e nao FAILED: FAILED significa "tentei
+                 * provisionar 5 vezes e desisti", e misturar os dois faria o painel
+                 * mostrar erro onde houve um corte normal.
+                 */
                 using (var cmd = new SqlCommand(
                     "UPDATE ConnectionDevices SET public_key = NULL, config = NULL, qrcode = NULL," +
-                    " address = NULL, status_queue = 'FAILED' WHERE id = @id", conn))
+                    " address = NULL, status_queue = 'REVOKED'" +
+                    " WHERE id = @id AND revoked_at IS NOT NULL", conn))
                 {
                     cmd.Parameters.AddWithValue("@id", p.Item1);
                     cmd.ExecuteNonQuery();

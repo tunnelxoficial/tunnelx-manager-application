@@ -41,11 +41,24 @@ namespace tunnelx.Services
                 if (string.IsNullOrWhiteSpace(bruta))
                 {
                     throw new InvalidOperationException(
-                        "Conexao com o banco nao configurada. Defina a variavel de ambiente " +
-                        "TUNNELX_DB ou a chave DbConnectionString no App.config.");
+                        "CONEXAO NAO CONFIGURADA. Defina a variavel de ambiente TUNNELX_DB " +
+                        "ou a chave DbConnectionString no App.config (ou no tunnelx.exe.config " +
+                        "ao lado do executavel). Nada foi tentado contra o banco.");
                 }
 
-                // Forca TLS mesmo que a string configurada tenha esquecido.
+                /*
+                 * TLS por padrao, mas NAO a ferro e fogo.
+                 *
+                 * Este provisionador grava a CHAVE PRIVADA de cada cliente no banco, e
+                 * o banco esta num IP publico: sem TLS, cada chave atravessa a internet
+                 * em claro. Por isso o padrao e Encrypt=true.
+                 *
+                 * Mas se o SQL Server nao tiver TLS habilitado, forcar a criptografia
+                 * derruba a conexao inteira — e um provisionador que nao conecta e pior
+                 * que um que conecta sem cifra. Quem escrever Encrypt=false na propria
+                 * string tem a escolha respeitada: o valor so e acrescentado quando a
+                 * palavra nao aparece.
+                 */
                 if (bruta.IndexOf("Encrypt", StringComparison.OrdinalIgnoreCase) < 0)
                 {
                     bruta = bruta.TrimEnd(';') + ";Encrypt=true;TrustServerCertificate=true;";
@@ -220,6 +233,37 @@ namespace tunnelx.Services
                         }
                     }
                 }
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Configuracao ausente nao e falha de rede: dizer "falha ao falar com o
+                // banco" mandaria o operador investigar firewall e servidor quando o que
+                // falta e uma variavel de ambiente.
+                Log.Error("PROVISIONAMENTO PARADO: " + ex.Message);
+            }
+            catch (System.Data.SqlClient.SqlException ex)
+            {
+                /*
+                 * Erro do proprio SQL Server ou do caminho ate ele.
+                 *
+                 * O caso que mais confunde e o de criptografia: se o servidor nao tem
+                 * TLS habilitado e a string pede Encrypt=true, a conexao falha com uma
+                 * mensagem sobre certificado ou canal seguro — que nao parece ter nada
+                 * a ver com configuracao. Apontar o caminho aqui economiza horas.
+                 */
+                var msg = ex.Message ?? string.Empty;
+                var pareceTls = msg.IndexOf("certificate", StringComparison.OrdinalIgnoreCase) >= 0
+                    || msg.IndexOf("SSL", StringComparison.OrdinalIgnoreCase) >= 0
+                    || msg.IndexOf("encryption", StringComparison.OrdinalIgnoreCase) >= 0
+                    || msg.IndexOf("secure", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                Log.Error("falha ao falar com o banco" + (pareceTls
+                    ? " — parece ser CRIPTOGRAFIA. Este SQL Server aparentemente nao tem TLS" +
+                      " habilitado (o backend Node conecta com encrypt=false). Para destravar" +
+                      " agora, inclua Encrypt=false na sua string de conexao; o correto e" +
+                      " habilitar TLS no servidor, porque a chave privada de cada cliente" +
+                      " trafega por ai."
+                    : string.Empty), ex);
             }
             catch (Exception ex)
             {
