@@ -65,13 +65,16 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
+    <Compile Include="Services\ConnectionSnapshot.cs" />
     <Compile Include="Services\DbBackgroundService.cs" />
     <Compile Include="Services\DeviceProvisioner.cs" />
     <Compile Include="Services\EndpointHelper.cs" />
+    <Compile Include="Services\GradeConexoes.cs" />
     <Compile Include="Services\IcsHelper.cs" />
     <Compile Include="Services\Log.cs" />
     <Compile Include="Services\InternetConnectionSharing.cs" />
     <Compile Include="Services\NetworkHelper.cs" />
+    <Compile Include="Services\Tema.cs" />
     <Compile Include="Services\TunnelManager.cs" />
     <Compile Include="Services\WireGuardManager.cs" />
     <Compile Include="Strings\Language.cs" />

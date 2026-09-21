@@ -568,8 +568,8 @@ namespace tunnelx
             // mainLayout
             // 
             this.mainLayout.ColumnCount = 2;
-            this.mainLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 35F));
-            this.mainLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 65F));
+            this.mainLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 28F));
+            this.mainLayout.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 72F));
             this.mainLayout.Controls.Add(this.groupBox1, 0, 0);
             this.mainLayout.Controls.Add(this.groupBox3, 1, 0);
             this.mainLayout.Dock = System.Windows.Forms.DockStyle.Fill;
@@ -604,7 +604,7 @@ namespace tunnelx
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 17F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.BackColor = System.Drawing.Color.White;
-            this.ClientSize = new System.Drawing.Size(744, 521);
+            this.ClientSize = new System.Drawing.Size(1060, 640);
             this.Controls.Add(this.mainLayout);
             this.Controls.Add(this.headerPanel);
             this.Controls.Add(this.linkLabel2);
@@ -612,7 +612,7 @@ namespace tunnelx
             this.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(60)))), ((int)(((byte)(60)))), ((int)(((byte)(60)))));
             this.Margin = new System.Windows.Forms.Padding(3, 4, 3, 4);
-            this.MinimumSize = new System.Drawing.Size(760, 560);
+            this.MinimumSize = new System.Drawing.Size(900, 580);
             this.Name = "frmDefault";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "Fomulário de MVP do TunnelX";

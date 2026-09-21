@@ -20,6 +20,16 @@ namespace tunnelx
         private Language _language;
         private bool _lastTunnelActive;
 
+        // Estado da atualizacao da grade de conexoes.
+        //
+        // A leitura (wg.exe + os client.json) roda FORA da thread da interface.
+        // Antes o Tick fazia tudo aqui, a cada segundo: uma chamada ao wg.exe para
+        // o panorama e MAIS UMA POR PEER, via PeerExists, so para saber se o peer
+        // existia, dado que ja estava no panorama. Com 12 clientes eram 13
+        // processos por segundo bloqueando a tela; com 30, o app passa mais tempo
+        // parado do que respondendo. Era esse o travamento.
+        private int _coletando;                 // 0/1 por Interlocked: uma coleta de cada vez
+
 
         #region ... MÉTODOS ...
 
@@ -155,7 +165,13 @@ namespace tunnelx
 
         private void ValidaConexao()
         {
-            if (IsTunnelActive())
+            ValidaConexao(IsTunnelActive());
+        }
+
+        /// <param name="ativo">Estado do tunel ja apurado: a consulta e cara.</param>
+        private void ValidaConexao(bool ativo)
+        {
+            if (ativo)
             {
                 // Online e Funcionando
                 dtgInterfaces.Enabled = false;
@@ -365,6 +381,10 @@ namespace tunnelx
         {
             _language = new Language(language.PT);
 
+            // Depois que os controles existem e antes de preencher as grades:
+            // o tema ajusta estilos que a montagem das linhas vai herdar.
+            Services.Tema.Aplicar(this);
+
             ListarInterfaces();
             dtgInterfaces.ClearSelection();
 
@@ -563,8 +583,7 @@ namespace tunnelx
 
         private void tmrStatus_Tick(object sender, EventArgs e)
         {
-            ValidaConexao();
-            UpdateActiveConnections();
+            SolicitarAtualizacao();
         }
 
         private void btStop_Click(object sender, EventArgs e)
@@ -582,109 +601,85 @@ namespace tunnelx
             }
         }
 
+        /// <summary>
+        /// Pede uma atualizacao da grade. Volta na hora; a grade muda quando a
+        /// leitura terminar.
+        /// </summary>
         private void UpdateActiveConnections()
         {
-            try
-            {
-                dtgConexoesAtivas.Rows.Clear();
-                var status = TunnelManager.GetWgStatus();
-                var root = System.IO.Path.Combine(TunnelManager.ConfDir, "clients");
-                if (!Directory.Exists(root))
-                    Directory.CreateDirectory(root);
-                var dirs = Directory.GetDirectories(root);
-                foreach (var dir in dirs)
-                {
-                    var json = System.IO.Path.Combine(dir, "client.json");
-                    if (!File.Exists(json)) continue;
-                    var txt = File.ReadAllText(json);
-                    var nameLine = txt.Split('\n').FirstOrDefault(l => l.IndexOf("\"nome\"", StringComparison.OrdinalIgnoreCase) >= 0);
-                    var pkLine = txt.Split('\n').FirstOrDefault(l => l.IndexOf("\"publicKey\"", StringComparison.OrdinalIgnoreCase) >= 0);
-                    var addrLine = txt.Split('\n').FirstOrDefault(l => l.IndexOf("\"address\"", StringComparison.OrdinalIgnoreCase) >= 0);
-                    if (pkLine == null) continue;
-                    var name = nameLine != null ? nameLine.Substring(nameLine.IndexOf(':') + 1).Trim().Trim('"', ',', ' ') : "—";
-                    var pk = pkLine.Substring(pkLine.IndexOf(':') + 1).Trim().Trim('"', ',', ' ');
-                    var addr = addrLine != null ? addrLine.Substring(addrLine.IndexOf(':') + 1).Trim().Trim('"', ',', ' ') : null;
-                    var enabled = TunnelManager.PeerExists(pk);
-                    var info = GetPeerStatus(status, pk);
-                    var peerShort = pk.Length > 10 ? pk.Substring(0, 10) + "…" : pk;
-                    var idx = dtgConexoesAtivas.Rows.Add();
-                    var r = dtgConexoesAtivas.Rows[idx];
-                    r.Cells["colClient"].Value = name;
-                    r.Cells["colPeer"].Value = peerShort;
-                    r.Cells["colEndpoint"].Value = info.endpoint ?? "—";
-                    r.Cells["colHandshake"].Value = info.handshake ?? "—";
-                    r.Cells["colRx"].Value = info.rx ?? "0";
-                    r.Cells["colTx"].Value = info.tx ?? "0";
-                    r.Tag = pk + "|" + (addr ?? "") + "|" + (enabled ? "1" : "0");
-                }
-                if (dtgConexoesAtivas.Rows.Count == 0)
-                {
-                    var idx = dtgConexoesAtivas.Rows.Add();
-                    var r = dtgConexoesAtivas.Rows[idx];
-                    r.Cells["colClient"].Value = "—";
-                    r.Cells["colPeer"].Value = "—";
-                    r.Cells["colEndpoint"].Value = "Sem conexões";
-                    r.Cells["colHandshake"].Value = "—";
-                    r.Cells["colRx"].Value = "0";
-                    r.Cells["colTx"].Value = "0";
-                }
-                dtgConexoesAtivas.Visible = true;
-            }
-            catch
-            {
-                // evita travar UI caso wg.exe não esteja disponível
-                dtgConexoesAtivas.Rows.Clear();
-                dtgConexoesAtivas.Rows.Add("", "—", "—", "Sem conexões", "0", "0");
-            }
+            SolicitarAtualizacao();
         }
 
-        private (string endpoint, string handshake, string rx, string tx) GetPeerStatus(string wgShowOutput, string publicKey)
+        /// <summary>
+        /// Dispara a leitura do estado em segundo plano.
+        /// </summary>
+        /// <remarks>
+        /// Se a leitura anterior ainda nao acabou, esta chamada e descartada. Sem
+        /// isso um ciclo lento (wg.exe demorando, disco ocupado) acumularia Ticks
+        /// e a tela ficaria sempre atrasada em relacao ao que esta pedindo.
+        /// </remarks>
+        private void SolicitarAtualizacao()
         {
-            if (string.IsNullOrWhiteSpace(wgShowOutput) || string.IsNullOrWhiteSpace(publicKey)) return (null, null, null, null);
-            var lines = wgShowOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            bool match = false;
-            string endpoint = null, handshake = null, rx = null, tx = null;
-            foreach (var line in lines)
+            if (System.Threading.Interlocked.CompareExchange(ref _coletando, 1, 0) != 0)
+                return;
+
+            System.Threading.Tasks.Task.Run(() =>
             {
-                var s = line.Trim();
-                if (s.StartsWith("peer:", StringComparison.OrdinalIgnoreCase))
+                ConnectionSnapshot snap = null;
+                bool ativo = false;
+
+                try
                 {
-                    var val = s.Substring(5).Trim();
-                    match = string.Equals(val, publicKey, StringComparison.OrdinalIgnoreCase);
+                    snap = ConnectionSnapshot.Coletar();
+                    ativo = IsTunnelActive();   // nao toca em controle: pode rodar aqui
                 }
-                else if (match && s.StartsWith("endpoint:", StringComparison.OrdinalIgnoreCase))
+                catch { }
+
+                try
                 {
-                    endpoint = s.Substring(9).Trim();
-                }
-                else if (match && s.StartsWith("latest handshake:", StringComparison.OrdinalIgnoreCase))
-                {
-                    handshake = s.Substring(17).Trim();
-                }
-                else if (match && s.StartsWith("transfer:", StringComparison.OrdinalIgnoreCase))
-                {
-                    var val = s.Substring(9).Trim();
-                    var parts = val.Split(',');
-                    if (parts.Length >= 2)
+                    if (snap != null && IsHandleCreated && !IsDisposed)
                     {
-                        rx = parts[0].Replace("received", "").Trim();
-                        tx = parts[1].Replace("sent", "").Trim();
+                        BeginInvoke(new Action(() =>
+                        {
+                            // O contador so zera depois de aplicar: assim nunca ha duas
+                            // atualizacoes disputando a grade.
+                            try { AplicarSnapshot(snap, ativo); }
+                            finally { System.Threading.Volatile.Write(ref _coletando, 0); }
+                        }));
+                        return;
                     }
                 }
-            }
-            return (endpoint, handshake, rx, tx);
+                catch (ObjectDisposedException) { }      // a tela fechou durante a leitura
+                catch (InvalidOperationException) { }
+
+                System.Threading.Volatile.Write(ref _coletando, 0);
+            });
         }
+
+        private void AplicarSnapshot(ConnectionSnapshot snap, bool tunelAtivo)
+        {
+            if (IsDisposed) return;
+
+            ValidaConexao(tunelAtivo);
+            Services.GradeConexoes.Reconciliar(dtgConexoesAtivas, snap);
+            Services.Tema.AtualizarResumo(groupBox3, snap);
+            dtgConexoesAtivas.Visible = true;
+        }
+
 
         private void dtgConexoesAtivas_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0) return;
             if (dtgConexoesAtivas.Columns[e.ColumnIndex].Name != "colActions") return;
             var row = dtgConexoesAtivas.Rows[e.RowIndex];
-            var tag = row.Tag as string;
-            if (string.IsNullOrEmpty(tag)) return;
-            var parts = tag.Split('|');
-            var pk = parts[0];
-            var addr = parts.Length > 1 ? parts[1] : null;
-            var enabled = parts.Length > 2 && parts[2] == "1";
+
+            // Null na linha de aviso "sem conexoes": nao ha o que ativar ali.
+            var peer = Services.GradeConexoes.PeerDaLinha(row);
+            if (peer == null) return;
+
+            var pk = peer.PublicKey;
+            var addr = peer.Address;
+            var enabled = peer.Enabled;
 
             var menu = new ContextMenuStrip();
             if (enabled)
