@@ -681,33 +681,111 @@ PersistentKeepalive = 15
             catch { }
         }
 
-        public static void ReloadTunnel()
+        /// <summary>
+        /// Aplica o TunnelX.conf ao tunel em execucao, SEM derrubar ninguem.
+        /// </summary>
+        /// <remarks>
+        /// Antes este metodo passava o .conf cru ao "wg syncconf". O arquivo traz
+        /// Address e MTU, que sao diretivas do wg-quick e nao do protocolo: o
+        /// wg.exe aborta no parse ("Line unrecognized: Address=..."), sempre, em
+        /// todo arquivo que este programa escreve. O plano B era desinstalar e
+        /// reinstalar o servico do tunel — e isso derruba TODOS os clientes.
+        ///
+        /// Com o timer de status de 1 s, virava um laco: o tunel subia,
+        /// RestoreAfterTunnelRestart chamava este metodo, o servico era
+        /// reinstalado, o tunel caia, subia, e recomecava. Quem estava conectado
+        /// perdia toda conexao TCP a cada poucos segundos — a causa real da
+        /// "internet horrivel", muito acima de MTU ou rota.
+        ///
+        /// Agora o arquivo e reduzido (ConfWg.Despir) ao que o protocolo entende,
+        /// o syncconf funciona, e a recarga e a quente: peers novos entram e os
+        /// que sairam somem sem que ninguem perca o handshake.
+        ///
+        /// Reinstalar deixou de ser plano B para falha de syncconf. So acontece
+        /// quando o servico realmente NAO esta rodando — que e outra situacao, e
+        /// ai subir o tunel e o certo. Falha de syncconf com o tunel de pe vira
+        /// registro no log, nao uma queda geral.
+        /// </remarks>
+        /// <returns>true se a configuracao foi aplicada a quente.</returns>
+        public static bool ReloadTunnel()
         {
-            if (!File.Exists(WgShowExePath)) return;
+            if (!File.Exists(WgShowExePath) || !File.Exists(ServerConfPath))
+                return false;
+
+            // Fica ao lado do .conf de proposito: mesma pasta, mesma protecao de
+            // ACL. O arquivo carrega a chave privada do servidor e e apagado no
+            // finally, aconteca o que acontecer.
+            var enxuto = ServerConfPath + ".sync";
+
             try
             {
+                File.WriteAllText(enxuto, ConfWg.Despir(File.ReadAllText(ServerConfPath)));
+
                 var psi = new ProcessStartInfo
                 {
                     FileName = WgShowExePath,
-                    Arguments = $"syncconf {WireGuardInterfaceName} \"{ServerConfPath}\"",
+                    Arguments = $"syncconf {WireGuardInterfaceName} \"{enxuto}\"",
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
+
                 using (var p = Process.Start(psi))
                 {
+                    var erro = p.StandardError.ReadToEnd();
                     p.WaitForExit();
-                    if (p.ExitCode == 0) return;
+
+                    if (p.ExitCode == 0) return true;
+
+                    if (TunnelServiceRunning())
+                    {
+                        // De pe, mas nao aceitou a configuracao. Reinstalar aqui
+                        // custaria a conexao de todos os clientes para consertar o
+                        // que pode ser um peer invalido. Registra e sai.
+                        Log.Aviso("syncconf recusou a configuracao (o tunel segue no ar): " +
+                                  erro.Trim());
+                        return false;
+                    }
+
+                    Log.Aviso("syncconf falhou e o servico do tunel nao esta rodando; subindo o tunel. " +
+                              erro.Trim());
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error("falha ao recarregar a configuracao do tunel", ex);
+                if (TunnelServiceRunning()) return false;
+            }
+            finally
+            {
+                try { if (File.Exists(enxuto)) File.Delete(enxuto); } catch { }
+            }
+
             try
             {
-                UninstallTunnelService();
                 InstallAndStartTunnelService();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error("falha ao subir o servico do tunel", ex);
+            }
+            return false;
+        }
+
+        /// <summary>O servico do tunel esta rodando?</summary>
+        public static bool TunnelServiceRunning()
+        {
+            try
+            {
+                using (var svc = new System.ServiceProcess.ServiceController(
+                           "WireGuardTunnel$" + WireGuardInterfaceName))
+                    return svc.Status == System.ServiceProcess.ServiceControllerStatus.Running;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public static bool PeerExists(string publicKey)
@@ -835,6 +913,30 @@ PersistentKeepalive = 15
             }
         }
 
+        /// <summary>
+        /// Apaga TODAS as regras de firewall com este nome.
+        /// </summary>
+        /// <remarks>
+        /// Rules.Remove(nome) tira uma ocorrencia por chamada. Conta primeiro e
+        /// repete o numero exato: enumerar a colecao COM a cada volta ficaria caro
+        /// justamente no caso que interessa, o de muitas regras acumuladas.
+        /// </remarks>
+        private static void RemoverRegrasPorNome(INetFwPolicy2 policy2, string nome)
+        {
+            int quantas;
+            try
+            {
+                quantas = policy2.Rules.Cast<INetFwRule>().Count(
+                    r => string.Equals(r.Name, nome, StringComparison.OrdinalIgnoreCase));
+            }
+            catch { return; }
+
+            for (var i = 0; i < quantas; i++)
+            {
+                try { policy2.Rules.Remove(nome); } catch { return; }
+            }
+        }
+
         public static void BlockClientInternet(string addressCidr)
         {
             try
@@ -850,17 +952,17 @@ PersistentKeepalive = 15
                 if (!ifaceGuid.EndsWith("}")) ifaceGuid = ifaceGuid + "}";
                 var policy2 = (INetFwPolicy2)Activator.CreateInstance(
                     Type.GetTypeFromProgID("HNetCfg.FwPolicy2"));
-                foreach (INetFwRule r in policy2.Rules.Cast<INetFwRule>().ToList())
-                {
-                    if (string.Equals(r.Name, ruleNameOut, StringComparison.OrdinalIgnoreCase))
-                    {
-                        r.Enabled = true;
-                    }
-                    if (string.Equals(r.Name, ruleNameIn, StringComparison.OrdinalIgnoreCase))
-                    {
-                        r.Enabled = true;
-                    }
-                }
+                // O Windows aceita regras de nomes repetidos. Este metodo habilitava
+                // as que ja existiam e mesmo assim acrescentava outras duas — toda
+                // chamada somava mais um par, para sempre. Como o chamador aqui era
+                // RestoreAfterTunnelRestart, que rodava a cada poucos segundos por
+                // causa do laco de reinstalacao do tunel, o firewall acumulava
+                // milhares de regras identicas. E o firewall avalia a lista inteira
+                // a cada conexao nova.
+                //
+                // Apagar antes de acrescentar deixa exatamente um par por cliente.
+                RemoverRegrasPorNome(policy2, ruleNameOut);
+                RemoverRegrasPorNome(policy2, ruleNameIn);
                 var rule = (INetFwRule)Activator.CreateInstance(
                     Type.GetTypeFromProgID("HNetCfg.FWRule"));
                 rule.Name = ruleNameOut;
