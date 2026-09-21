@@ -40,6 +40,38 @@ namespace tunnelx.Services
         public const string ServerAddress = "10.66.66.1/16";
         public const string AndroidAddress = "10.66.66.2/32";
         public const int DefaultMtu = 1420;
+
+        /// <summary>
+        /// MTU gravado no .conf do cliente. Ajustavel pelo App.config (ClientMtu).
+        /// </summary>
+        /// <remarks>
+        /// Era DefaultMtu - 40 = 1380, e isso quebra em rede movel.
+        ///
+        /// A conta: o WireGuard acrescenta 60 bytes sobre IPv4/UDP (20 de IP, 8 de
+        /// UDP, 16 de cabecalho e 16 da tag Poly1305). Com MTU 1380 o datagrama que
+        /// sai tem 1440 bytes. Em linha fixa isso cabe — PPPoE aceita 1492. Mas em
+        /// 4G com CGNAT o MTU do caminho costuma ficar entre 1400 e 1430: o pacote
+        /// e descartado em silencio, o aviso de "fragmentation needed" nao volta, e
+        /// o TCP retransmite sem parar. O sintoma e exatamente vazao baixa com ping
+        /// alto e latencia pior sob carga.
+        ///
+        /// 1280 e o piso seguro: e o MTU minimo que todo caminho IPv6 precisa
+        /// aceitar, entao nenhuma rede o fragmenta. Custa 1,4% de eficiencia
+        /// contra 1420 — irrelevante perto de uma retransmissao em laco.
+        ///
+        /// Depois de estabilizar, da para subir de 20 em 20 ate achar o teto do
+        /// caminho, sem recompilar: basta mudar a chave no App.config.
+        /// </remarks>
+        public static int ClientMtu
+        {
+            get
+            {
+                int v;
+                var bruto = System.Configuration.ConfigurationManager.AppSettings["ClientMtu"];
+                if (int.TryParse(bruto, out v) && v >= 576 && v <= 1420) return v;
+                return 1280;
+            }
+        }
         public static string ClientsDir => System.IO.Path.Combine(ConfDir, "clients");
 
         // === ENDPOINT PUBLICO / COMPARTILHAMENTO DE INTERNET ===
@@ -294,12 +326,12 @@ AllowedIPs = {AndroidAddress}
 PrivateKey = {AndroidPrivateKeyB64}
 Address = {AndroidAddress}
 DNS = 8.8.8.8
-MTU = {DefaultMtu - 40}
+MTU = {ClientMtu}
 
 [Peer]
 PublicKey = {ServerPublicKeyB64}
 Endpoint = {windowsPublicEndpointHostOrIp}:{ListenPort}
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 15
 ".Trim() + Environment.NewLine;
         }
@@ -311,12 +343,12 @@ PersistentKeepalive = 15
 PrivateKey = {clientPrivateKeyB64}
 Address = {clientAddressCidr}
 DNS = 8.8.8.8
-MTU = {DefaultMtu - 40}
+MTU = {ClientMtu}
 
 [Peer]
 PublicKey = {ServerPublicKeyB64}
 Endpoint = {windowsPublicEndpointHostOrIp}:{ListenPort}
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 15
 ".Trim() + Environment.NewLine;
         }

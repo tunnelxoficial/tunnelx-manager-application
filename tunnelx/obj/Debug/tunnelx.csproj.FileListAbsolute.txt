@@ -618,3 +618,4 @@ C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.pdb
 C:\Users\marco\AppData\Local\Temp\claude\C--tunnelx-project-tunnelx-app-tunnelxapp\698cebc5-eb1b-4bda-94a8-9aff9f3ba24a\scratchpad\build\tunnelx.exe.config
 C:\Users\marco\AppData\Local\Temp\claude\C--tunnelx-project-tunnelx-app-tunnelxapp\698cebc5-eb1b-4bda-94a8-9aff9f3ba24a\scratchpad\build\tunnelx.exe
 C:\Users\marco\AppData\Local\Temp\claude\C--tunnelx-project-tunnelx-app-tunnelxapp\698cebc5-eb1b-4bda-94a8-9aff9f3ba24a\scratchpad\build\tunnelx.pdb
+C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.exe.config

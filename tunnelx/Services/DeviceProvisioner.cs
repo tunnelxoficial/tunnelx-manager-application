@@ -166,7 +166,8 @@ namespace tunnelx.Services
                    s.duration_label,
                    s.expires_at,
                    con.total_connections,
-                   d.ConnectionId
+                   d.ConnectionId,
+                   ISNULL(con.data_limit, p.dataLimit) AS velocidade
               FROM ConnectionDevices d
               JOIN Connections con ON con.id = d.ConnectionId
               JOIN Clients cli     ON cli.id = d.ClientId
@@ -227,7 +228,11 @@ namespace tunnelx.Services
                 Prazo = titular ? null : Texto(r, 5),
                 Expira = titular ? null : Instante(r, 6),
                 Vagas = r.IsDBNull(7) ? 1 : Math.Max(1, r.GetInt32(7)),
-                Conexao = r.IsDBNull(8) ? 0 : r.GetInt32(8)
+                Conexao = r.IsDBNull(8) ? 0 : r.GetInt32(8),
+
+                // A conexao manda sobre o plano: e o que permite dar uma velocidade
+                // diferente a um cliente sem precisar inventar um plano novo.
+                Velocidade = r.IsDBNull(9) ? 0 : r.GetInt32(9)
             };
         }
 
@@ -512,7 +517,8 @@ namespace tunnelx.Services
             var porCpf = new Dictionary<string, Ficha>(StringComparer.Ordinal);
 
             var sql = @"
-                SELECT con.id, con.cpf, cli.name, p.name, con.total_connections
+                SELECT con.id, con.cpf, cli.name, p.name, con.total_connections,
+                       ISNULL(con.data_limit, p.dataLimit) AS velocidade
                   FROM Connections con
              LEFT JOIN Clients cli ON cli.id = con.ClientId
              LEFT JOIN Plans p     ON p.id  = con.PlanId";
@@ -527,7 +533,8 @@ namespace tunnelx.Services
                         Dono = Texto(reader, 2),
                         Plano = Texto(reader, 3),
                         Papel = "titular",
-                        Vagas = reader.IsDBNull(4) ? 1 : Math.Max(1, reader.GetInt32(4))
+                        Vagas = reader.IsDBNull(4) ? 1 : Math.Max(1, reader.GetInt32(4)),
+                        Velocidade = reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
                     };
 
                     porId[reader.GetInt32(0)] = ficha;

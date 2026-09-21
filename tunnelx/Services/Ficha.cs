@@ -51,6 +51,20 @@ namespace tunnelx.Services
         public int Vagas;
 
         /// <summary>
+        /// Velocidade contratada, em megabits por segundo. Zero = sem limite.
+        /// </summary>
+        /// <remarks>
+        /// Este numero existia no banco desde sempre e nunca saia de la: o painel
+        /// mostrava, o aplicativo anunciava, e o provisionador nunca o via. Trazer
+        /// ate aqui e o primeiro passo para o limite deixar de ser enfeite.
+        ///
+        /// Guardar na ficha, e nao consultar o banco na hora de aplicar, e
+        /// deliberado: o limitador precisa ser reaplicado quando o tunel ou a
+        /// maquina reinicia, e nesse momento pode nao haver banco do outro lado.
+        /// </remarks>
+        public int Velocidade;
+
+        /// <summary>
         /// A conexao (o tunel) a que este cliente pertence.
         /// </summary>
         /// <remarks>
@@ -140,6 +154,7 @@ namespace tunnelx.Services
             int n;
             if (int.TryParse(Pegar(campos, "vagas"), out n)) f.Vagas = n;
             if (int.TryParse(Pegar(campos, "conexao"), out n)) f.Conexao = n;
+            if (int.TryParse(Pegar(campos, "velocidade"), out n)) f.Velocidade = n;
 
             return f;
         }
@@ -162,7 +177,8 @@ namespace tunnelx.Services
             sb.Append("  \"prazo\": \"").Append(Json.Escapar(Prazo)).Append("\",\n");
             sb.Append("  \"expira\": \"").Append(Json.Escapar(Expira)).Append("\",\n");
             sb.Append("  \"vagas\": ").Append(Vagas).Append(",\n");
-            sb.Append("  \"conexao\": ").Append(Conexao).Append("\n");
+            sb.Append("  \"conexao\": ").Append(Conexao).Append(",\n");
+            sb.Append("  \"velocidade\": ").Append(Velocidade).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }

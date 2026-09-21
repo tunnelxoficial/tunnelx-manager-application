@@ -86,6 +86,9 @@ namespace tunnelx.Services
             public string Key { get { return PublicKey ?? string.Empty; } }
 
             public string Plano { get { return Ficha == null ? null : Ficha.Plano; } }
+
+            /// <summary>Velocidade contratada em Mbps; zero quando nao ha limite.</summary>
+            public int Velocidade { get { return Ficha == null ? 0 : Ficha.Velocidade; } }
             public string Dono { get { return Ficha == null ? null : Ficha.Dono; } }
             public bool Convidado { get { return Ficha != null && Ficha.Convidado; } }
 
@@ -135,6 +138,7 @@ namespace tunnelx.Services
                 var partes = new List<string>();
 
                 if (!string.IsNullOrWhiteSpace(Ficha.Plano)) partes.Add(Ficha.Plano);
+                if (Ficha.Velocidade > 0) partes.Add(Ficha.Velocidade + " Mbps");
                 if (Ficha.Vagas > 0)
                     partes.Add(Ocupadas > 0
                         ? Ocupadas + " de " + Ficha.Vagas + " aparelhos"
