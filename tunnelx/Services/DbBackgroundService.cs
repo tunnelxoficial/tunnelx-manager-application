@@ -17,7 +17,29 @@ namespace tunnelx.Services
         private bool _isProcessing;
 
         /// <summary>
-        /// Conexao com o banco, vinda do ambiente ou do App.config.
+        /// Conexao embutida — o ultimo recurso da cadeia.
+        /// </summary>
+        /// <remarks>
+        /// Existe para o provisionador subir numa maquina nova sem ninguem precisar
+        /// configurar nada. E uma escolha deliberada do dono do produto, com um custo
+        /// que vale estar escrito aqui: a senha de producao vai junto em TODO binario
+        /// compilado e em todo clone do repositorio. Quem tiver qualquer um dos dois
+        /// tem o banco.
+        ///
+        /// Por isso a ordem da cadeia importa: TUNNELX_DB e o App.config vem ANTES.
+        /// Trocar a senha em producao nao exige recompilar — basta definir a variavel
+        /// de ambiente na maquina, e este valor deixa de ser consultado.
+        ///
+        /// Encrypt=false porque este SQL Server nao tem TLS habilitado (o backend Node
+        /// tambem conecta assim, ver config/db.js). Com Encrypt=true a conexao falha.
+        /// Quando o servidor ganhar certificado, trocar aqui e nos dois outros lugares.
+        /// </remarks>
+        private const string ConexaoEmbutida =
+            "Server=64.20.61.66,1433;Database=tunnelx;User Id=tunnelx;" +
+            "Password=TuNn3Lx2@25;Encrypt=false;";
+
+        /// <summary>
+        /// Conexao com o banco: ambiente, App.config, ou o valor embutido.
         ///
         /// Era uma constante com usuario e senha em texto puro, compilada no
         /// binario e versionada no git. Duas consequencias: qualquer um com
@@ -33,17 +55,22 @@ namespace tunnelx.Services
         {
             get
             {
-                var doAmbiente = Environment.GetEnvironmentVariable("TUNNELX_DB");
-                var bruta = !string.IsNullOrWhiteSpace(doAmbiente)
-                    ? doAmbiente
-                    : System.Configuration.ConfigurationManager.AppSettings["DbConnectionString"];
+                // 1. Variavel de ambiente: vence tudo. E por onde se troca a senha
+                //    numa maquina sem recompilar nem editar arquivo.
+                var bruta = Environment.GetEnvironmentVariable("TUNNELX_DB");
 
+                // 2. App.config / tunnelx.exe.config ao lado do executavel.
                 if (string.IsNullOrWhiteSpace(bruta))
                 {
-                    throw new InvalidOperationException(
-                        "CONEXAO NAO CONFIGURADA. Defina a variavel de ambiente TUNNELX_DB " +
-                        "ou a chave DbConnectionString no App.config (ou no tunnelx.exe.config " +
-                        "ao lado do executavel). Nada foi tentado contra o banco.");
+                    bruta = System.Configuration.ConfigurationManager.AppSettings["DbConnectionString"];
+                }
+
+                // 3. Ultimo recurso: o valor embutido logo abaixo.
+                if (string.IsNullOrWhiteSpace(bruta))
+                {
+                    Log.Aviso("usando a conexao EMBUTIDA no codigo; defina TUNNELX_DB " +
+                              "ou DbConnectionString para nao depender dela");
+                    bruta = ConexaoEmbutida;
                 }
 
                 /*
