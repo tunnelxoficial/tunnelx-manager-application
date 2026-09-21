@@ -70,7 +70,10 @@
     <Compile Include="Services\DeviceProvisioner.cs" />
     <Compile Include="Services\EndpointHelper.cs" />
     <Compile Include="Services\GradeConexoes.cs" />
+    <Compile Include="Services\Exclusao.cs" />
+    <Compile Include="Services\Ficha.cs" />
     <Compile Include="Services\IcsHelper.cs" />
+    <Compile Include="Services\Json.cs" />
     <Compile Include="Services\Log.cs" />
     <Compile Include="Services\InternetConnectionSharing.cs" />
     <Compile Include="Services\NetworkHelper.cs" />

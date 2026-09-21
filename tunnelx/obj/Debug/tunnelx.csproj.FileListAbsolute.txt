@@ -606,7 +606,6 @@ C:\tunnelx-project\tunnelx-manager-application\tunnelx\bin\Debug\System.Threadin
 C:\tunnelx-project\tunnelx-manager-application\tunnelx\bin\Debug\System.ValueTuple.xml
 C:\tunnelx-project\tunnelx-manager-application\tunnelx\bin\Debug\System.Web.Services.Description.pdb
 C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.csproj.AssemblyReference.cache
-C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.exe.config
 C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\Interop.NetFwTypeLib.dll
 C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.csproj.ResolveComReference.cache
 C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.frmDefault.resources
@@ -616,3 +615,6 @@ C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.csproj.
 C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.csproj.Up2Date
 C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.exe
 C:\tunnelx-project\tunnelx-manager-application\tunnelx\obj\Debug\tunnelx.pdb
+C:\Users\marco\AppData\Local\Temp\claude\C--tunnelx-project-tunnelx-app-tunnelxapp\698cebc5-eb1b-4bda-94a8-9aff9f3ba24a\scratchpad\build\tunnelx.exe.config
+C:\Users\marco\AppData\Local\Temp\claude\C--tunnelx-project-tunnelx-app-tunnelxapp\698cebc5-eb1b-4bda-94a8-9aff9f3ba24a\scratchpad\build\tunnelx.exe
+C:\Users\marco\AppData\Local\Temp\claude\C--tunnelx-project-tunnelx-app-tunnelxapp\698cebc5-eb1b-4bda-94a8-9aff9f3ba24a\scratchpad\build\tunnelx.pdb

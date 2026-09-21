@@ -47,6 +47,9 @@ namespace tunnelx.Services
             public int ClientId;
             public string ClientName;
             public string DeviceName;
+
+            /// <summary>Plano, titular e prazo — para a tela do operador.</summary>
+            public Ficha Ficha;
         }
 
         /// <summary>Um ciclo: destrava orfas, reivindica um lote, provisiona e corta.</summary>
@@ -54,6 +57,7 @@ namespace tunnelx.Services
         {
             RemoverRevogados(conn);
             DestravarOrfas(conn);
+            AtualizarFichas(conn);
 
             foreach (var device in Reivindicar(conn))
             {
@@ -127,22 +131,140 @@ namespace tunnelx.Services
                 }
             }
 
-            // O nome do cliente vem depois, fora do UPDATE: juntar Clients ali
-            // seguraria lock na tabela de clientes durante a reivindicacao.
-            foreach (var d in lista) d.ClientName = BuscarNomeDoCliente(d.ClientId, conn);
+            // Os dados de apoio vem depois, fora do UPDATE: juntar Clients e Plans
+            // ali seguraria lock nessas tabelas durante a reivindicacao. Aqui o
+            // reader do claim ja fechou e nao ha transacao aberta, entao nada
+            // fica preso. Uma consulta para o lote inteiro, e nao uma por
+            // aparelho como antes.
+            if (lista.Count > 0) CarregarFichas(lista, conn);
 
             if (lista.Count > 0) Log.Info($"devices: {lista.Count} aparelho(s) reivindicado(s)");
             return lista;
         }
 
-        private string BuscarNomeDoCliente(int clientId, SqlConnection conn)
+        /// <summary>
+        /// SQL comum a quem precisa da ficha de um aparelho.
+        /// </summary>
+        /// <remarks>
+        /// O papel sai de <c>d.ClientId = con.ClientId</c>, e NAO de
+        /// ConnectionShareId ser nulo. A diferenca e real: quando alguem que foi
+        /// convidado compra o proprio plano e volta ao mesmo tunel como titular,
+        /// o backend preserva o ConnectionShareId antigo (deviceService.js faz
+        /// `shareId ?? device.ConnectionShareId`). Pela chave estrangeira, o dono
+        /// apareceria na tela como convidado de si mesmo.
+        ///
+        /// As vagas saem de <c>Connections.total_connections</c> e nao das do
+        /// plano: o painel permite ajustar esse numero por conexao, e e o numero
+        /// da conexao que o servidor usa para recusar um convite sem vaga.
+        /// </remarks>
+        private const string SelectFicha = @"
+            SELECT d.id,
+                   cli.name  AS usuario,
+                   dono.name AS dono,
+                   p.name    AS plano,
+                   CASE WHEN d.ClientId = con.ClientId THEN 1 ELSE 0 END AS titular,
+                   s.duration_label,
+                   s.expires_at,
+                   con.total_connections,
+                   d.ConnectionId
+              FROM ConnectionDevices d
+              JOIN Connections con ON con.id = d.ConnectionId
+              JOIN Clients cli     ON cli.id = d.ClientId
+         LEFT JOIN Clients dono    ON dono.id = con.ClientId
+         LEFT JOIN Plans p         ON p.id  = con.PlanId
+         LEFT JOIN ConnectionShares s ON s.id = d.ConnectionShareId";
+
+        /// <summary>Preenche nome e ficha de um lote de aparelhos numa consulta so.</summary>
+        private void CarregarFichas(List<DeviceInfo> lote, SqlConnection conn)
         {
-            using (var cmd = new SqlCommand("SELECT name FROM Clients WHERE id = @id", conn))
+            var porId = new Dictionary<int, DeviceInfo>();
+            foreach (var d in lote) porId[d.Id] = d;
+
+            // Os ids vem do OUTPUT do proprio UPDATE, nao de fora: sao inteiros
+            // lidos do banco, e interpola-los aqui nao abre porta para injecao.
+            var ids = string.Join(",", porId.Keys);
+
+            try
             {
-                cmd.Parameters.AddWithValue("@id", clientId);
-                var v = cmd.ExecuteScalar();
-                return v == null || v == DBNull.Value ? $"cliente{clientId}" : Convert.ToString(v);
+                using (var cmd = new SqlCommand(SelectFicha + " WHERE d.id IN (" + ids + ")", conn))
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        DeviceInfo alvo;
+                        if (!porId.TryGetValue(reader.GetInt32(0), out alvo)) continue;
+
+                        alvo.ClientName = Texto(reader, 1) ?? ("cliente" + alvo.ClientId);
+                        alvo.Ficha = MontarFicha(reader);
+                    }
+                }
             }
+            catch (Exception ex)
+            {
+                // A ficha e informacao de tela. Perde-la nao pode impedir o
+                // provisionamento, que e o que o cliente esta esperando.
+                Log.Aviso("nao foi possivel carregar as fichas do lote: " + ex.Message);
+            }
+
+            foreach (var d in lote)
+                if (string.IsNullOrEmpty(d.ClientName)) d.ClientName = "cliente" + d.ClientId;
+        }
+
+        /// <summary>Monta a ficha a partir das colunas de <see cref="SelectFicha"/>.</summary>
+        private static Ficha MontarFicha(System.Data.IDataRecord r)
+        {
+            var titular = !r.IsDBNull(4) && r.GetInt32(4) == 1;
+
+            return new Ficha
+            {
+                Dono = Texto(r, 2),
+                Plano = Texto(r, 3),
+                Papel = titular ? "titular" : "convidado",
+                // O rotulo do prazo ja vem pronto do servidor (utils/shareRules.js).
+                // Reescrever isso em C# criaria um terceiro formato para a mesma
+                // informacao, e o operador leria um numero diferente do que o
+                // cliente ve no aplicativo.
+                Prazo = titular ? null : Texto(r, 5),
+                Expira = titular ? null : Instante(r, 6),
+                Vagas = r.IsDBNull(7) ? 1 : Math.Max(1, r.GetInt32(7)),
+                Conexao = r.IsDBNull(8) ? 0 : r.GetInt32(8)
+            };
+        }
+
+        /// <summary>
+        /// Le uma coluna de data e devolve o instante em UTC, no formato ISO-8601.
+        /// </summary>
+        /// <remarks>
+        /// As colunas de data deste banco sao DATETIMEOFFSET, e GetDateTime sobre
+        /// DATETIMEOFFSET lanca InvalidCastException — nao devolve a data sem o
+        /// fuso, LANCA. Como toda a atualizacao de fichas roda dentro de um
+        /// try/catch que so escreve no log, o efeito era o passo inteiro falhar em
+        /// silencio: nenhuma ficha gravada, coluna de plano vazia para a base toda,
+        /// e uma unica linha de aviso no arquivo de log para explicar.
+        ///
+        /// DateTimeOffset tambem nao implementa IConvertible, entao Convert.ToDateTime
+        /// falharia do mesmo jeito. Daí a checagem de tipo explicita.
+        /// </remarks>
+        private static string Instante(System.Data.IDataRecord r, int i)
+        {
+            if (r.IsDBNull(i)) return null;
+
+            var valor = r.GetValue(i);
+
+            if (valor is DateTimeOffset)
+                return ((DateTimeOffset)valor).UtcDateTime.ToString("O");
+
+            if (valor is DateTime)
+                return ((DateTime)valor).ToUniversalTime().ToString("O");
+
+            return null;
+        }
+
+        private static string Texto(System.Data.IDataRecord r, int i)
+        {
+            if (r.IsDBNull(i)) return null;
+            var v = Convert.ToString(r.GetValue(i));
+            return string.IsNullOrWhiteSpace(v) ? null : v;
         }
 
         /// <summary>Gera chave, aloca IP, aplica o peer e grava a config.</summary>
@@ -308,6 +430,214 @@ namespace tunnelx.Services
             }
         }
 
+
+        /* ------------------------------------------------------------ fichas -- */
+
+        /// <summary>
+        /// Mantem a ficha de TODOS os clientes em dia, a cada ciclo.
+        /// </summary>
+        /// <remarks>
+        /// O provisionamento grava a ficha do aparelho que acabou de criar, mas os
+        /// que ja existiam nunca passariam por ali: nenhum passo do ciclo olha para
+        /// CREATED. Sem esta varredura, a coluna de plano nasceria vazia para toda a
+        /// base atual e so se preencheria conforme as pessoas fossem reprovisionadas.
+        ///
+        /// Tambem e o que faz a tela acompanhar mudanca de plano ou troca de prazo
+        /// feita no painel, sem ninguem precisar reprovisionar nada.
+        ///
+        /// Custo: duas consultas por ciclo de 60 segundos. A gravacao so acontece
+        /// quando o conteudo muda (ver Ficha.Gravar), entao em regime normal isto
+        /// nao toca no disco.
+        /// </remarks>
+        private void AtualizarFichas(SqlConnection conn)
+        {
+            try
+            {
+                var n = AtualizarFichasDeAparelhos(conn) + AtualizarFichasDoLegado(conn);
+                if (n > 0) Log.Info($"fichas: {n} atualizada(s)");
+            }
+            catch (Exception ex)
+            {
+                // A ficha e informacao de tela: falhar aqui nao pode atrapalhar o
+                // provisionamento, que e o que o cliente esta esperando.
+                Log.Aviso("nao foi possivel atualizar as fichas: " + ex.Message);
+            }
+        }
+
+        /// <summary>Fichas dos aparelhos do modelo novo, em pastas dev_&lt;id&gt;.</summary>
+        private int AtualizarFichasDeAparelhos(SqlConnection conn)
+        {
+            var pendentes = new List<KeyValuePair<int, Ficha>>();
+
+            using (var cmd = new SqlCommand(SelectFicha + " WHERE d.revoked_at IS NULL", conn))
+            using (var reader = cmd.ExecuteReader())
+            {
+                // Le tudo antes de escrever: manter o reader aberto enquanto se mexe
+                // no disco segura a conexao por muito mais tempo que o necessario.
+                while (reader.Read())
+                    pendentes.Add(new KeyValuePair<int, Ficha>(reader.GetInt32(0), MontarFicha(reader)));
+            }
+
+            var gravadas = 0;
+            foreach (var p in pendentes)
+            {
+                var pasta = PastaDoDevice(p.Key);
+                // Pasta ausente e normal: o aparelho pode estar na fila ainda. Criar
+                // uma pasta so com a ficha faria aparecer na grade uma linha sem peer.
+                if (!Directory.Exists(pasta)) continue;
+                if (Ficha.Gravar(pasta, p.Value)) gravadas++;
+            }
+
+            return gravadas;
+        }
+
+        /// <summary>
+        /// Fichas das conexoes do modelo antigo, que tem peer proprio no disco.
+        /// </summary>
+        /// <remarks>
+        /// Sao a maioria da base hoje, e ficariam com plano em branco se so o modelo
+        /// novo fosse coberto — o operador leria isso como defeito da coluna nova.
+        ///
+        /// Existem duas convencoes de nome de pasta, ambas em producao:
+        ///   "&lt;id&gt;_&lt;nome&gt;"  gravada por DbBackgroundService.SaveClientToDisk
+        ///   "&lt;cpf&gt;"         gravada pela tela, em btGerarConfig/btGerarQr
+        /// A primeira casa pelo id; a segunda pelo CPF, comparando so os digitos,
+        /// porque o cadastro guarda ora "064.767.391-66" ora "06476739166".
+        /// </remarks>
+        private int AtualizarFichasDoLegado(SqlConnection conn)
+        {
+            if (!Directory.Exists(TunnelManager.ClientsDir)) return 0;
+
+            var porId = new Dictionary<int, Ficha>();
+            var porCpf = new Dictionary<string, Ficha>(StringComparer.Ordinal);
+
+            var sql = @"
+                SELECT con.id, con.cpf, cli.name, p.name, con.total_connections
+                  FROM Connections con
+             LEFT JOIN Clients cli ON cli.id = con.ClientId
+             LEFT JOIN Plans p     ON p.id  = con.PlanId";
+
+            using (var cmd = new SqlCommand(sql, conn))
+            using (var reader = cmd.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    var ficha = new Ficha
+                    {
+                        Dono = Texto(reader, 2),
+                        Plano = Texto(reader, 3),
+                        Papel = "titular",
+                        Vagas = reader.IsDBNull(4) ? 1 : Math.Max(1, reader.GetInt32(4))
+                    };
+
+                    porId[reader.GetInt32(0)] = ficha;
+                    ficha.Conexao = reader.GetInt32(0);
+
+                    var cpf = SoDigitos(Texto(reader, 1));
+                    if (cpf.Length == 0) continue;
+
+                    // Duas conexoes com o mesmo CPF — assinatura antiga e nova, por
+                    // exemplo — disputariam a mesma pasta, e venceria a que o banco
+                    // devolvesse por ultimo. Sem ORDER BY isso muda sozinho de um
+                    // ciclo para o outro, e o resultado nao e erro visivel: e um
+                    // plano plausivel atribuido a pessoa errada. Marcamos a colisao
+                    // com null e nao afirmamos nada.
+                    if (porCpf.ContainsKey(cpf)) porCpf[cpf] = null;
+                    else porCpf[cpf] = ficha;
+                }
+            }
+
+            var gravadas = 0;
+
+            foreach (var pasta in Directory.GetDirectories(TunnelManager.ClientsDir))
+            {
+                var nome = Path.GetFileName(pasta);
+                if (nome.StartsWith("dev_", StringComparison.OrdinalIgnoreCase)) continue;
+
+                // Cada convencao e reconhecida pela FORMA do nome, e uma pasta so
+                // tenta a convencao que combina com ela. Chutar as duas em toda pasta
+                // deixaria "12_JOAO", cujo id 12 nao existe, cair no casamento por CPF
+                // com a chave "12" — e o resultado de um chute errado nao e erro
+                // visivel, e o plano de outra pessoa exibido como fato.
+                Ficha ficha = null;
+
+                var separador = nome.IndexOf(Convert.ToChar(95));   // _
+                int id;
+
+                if (separador > 0 && int.TryParse(nome.Substring(0, separador), out id))
+                {
+                    // "<id>_<nome>", do provisionamento antigo por conexao.
+                    porId.TryGetValue(id, out ficha);
+                }
+                else if (separador < 0 && ParecCpf(nome))
+                {
+                    // "<cpf>", do caminho manual da tela.
+                    porCpf.TryGetValue(SoDigitos(nome), out ficha);
+                }
+
+                if (ficha == null)
+                {
+                    // Sem correspondencia no banco: cliente avulso, ou cadastro que
+                    // sumiu. Nao inventamos ficha — mas uma ficha ANTIGA aqui afirma
+                    // um plano que ja nao vale, entao ela sai.
+                    if (ApagarFichaObsoleta(pasta)) gravadas++;
+                    continue;
+                }
+
+                if (Ficha.Gravar(pasta, ficha)) gravadas++;
+            }
+
+            return gravadas;
+        }
+
+        /// <summary>O nome da pasta tem a cara de um CPF: so digitos e pontuacao.</summary>
+        private static bool ParecCpf(string nome)
+        {
+            if (string.IsNullOrEmpty(nome)) return false;
+
+            foreach (var c in nome)
+            {
+                var digito = c >= Convert.ToChar(48) && c <= Convert.ToChar(57);
+                if (!digito && c != Convert.ToChar(46) && c != Convert.ToChar(45)) return false;   // . -
+            }
+
+            return SoDigitos(nome).Length == 11;
+        }
+
+        /// <summary>
+        /// Tira a ficha de uma pasta que nao tem mais correspondencia no banco.
+        /// </summary>
+        /// <remarks>
+        /// Sem isto, apagar a conexao no painel ou corrigir um CPF no cadastro
+        /// deixaria a tela exibindo para sempre o plano e o titular de um registro
+        /// que ja nao existe.
+        /// </remarks>
+        private static bool ApagarFichaObsoleta(string pasta)
+        {
+            try
+            {
+                var caminho = Path.Combine(pasta, Ficha.NomeArquivo);
+                if (!File.Exists(caminho)) return false;
+
+                File.Delete(caminho);
+                Log.Aviso($"ficha obsoleta removida de {pasta}: sem correspondencia no banco");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Aviso($"nao foi possivel remover a ficha obsoleta de {pasta}: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static string SoDigitos(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            var sb = new System.Text.StringBuilder(s.Length);
+            foreach (var c in s) if (c >= Convert.ToChar(48) && c <= Convert.ToChar(57)) sb.Append(c);
+            return sb.ToString();
+        }
+
         /* ------------------------------------------------------------ disco -- */
 
         private static string PastaDoDevice(int deviceId)
@@ -328,12 +658,12 @@ namespace tunnelx.Services
             var dir = PastaDoDevice(device.Id);
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
 
-            var nome = Escapar($"{device.ClientName} ({device.DeviceName ?? "aparelho"})");
+            var nome = Json.Escapar($"{device.ClientName} ({device.DeviceName ?? "aparelho"})");
             var json =
                 "{\n" +
                 "  \"nome\": \"" + nome + "\",\n" +
-                "  \"publicKey\": \"" + Escapar(publicKey) + "\",\n" +
-                "  \"address\": \"" + Escapar(enderecoCidr) + "\",\n" +
+                "  \"publicKey\": \"" + Json.Escapar(publicKey) + "\",\n" +
+                "  \"address\": \"" + Json.Escapar(enderecoCidr) + "\",\n" +
                 "  \"deviceId\": " + device.Id + ",\n" +
                 "  \"connectionId\": " + device.ConnectionId + ",\n" +
                 "  \"clientId\": " + device.ClientId + ",\n" +
@@ -342,6 +672,12 @@ namespace tunnelx.Services
                 "}\n";
 
             File.WriteAllText(Path.Combine(dir, "client.json"), json);
+
+            // A ficha vai no mesmo passo, e nao so na varredura de 60 em 60
+            // segundos: o reprovisionamento apaga a pasta inteira antes de
+            // recria-la, e sem isto o plano e o titular sumiriam da tela ate a
+            // proxima varredura.
+            Ficha.Gravar(dir, device.Ficha);
         }
 
         private void ApagarDoDisco(int deviceId)
@@ -355,29 +691,6 @@ namespace tunnelx.Services
             {
                 Log.Aviso($"nao foi possivel apagar a pasta do aparelho {deviceId}: {ex.Message}");
             }
-        }
-
-        /// <summary>Escapa o que nao pode aparecer cru dentro de uma string JSON.</summary>
-        private static string Escapar(string valor)
-        {
-            if (string.IsNullOrEmpty(valor)) return string.Empty;
-            var sb = new System.Text.StringBuilder(valor.Length + 8);
-            foreach (var c in valor)
-            {
-                switch (c)
-                {
-                    case '"': sb.Append("\\\""); break;
-                    case '\\': sb.Append("\\\\"); break;
-                    case '\n': sb.Append("\\n"); break;
-                    case '\r': sb.Append("\\r"); break;
-                    case '\t': sb.Append("\\t"); break;
-                    default:
-                        if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
-                        else sb.Append(c);
-                        break;
-                }
-            }
-            return sb.ToString();
         }
     }
 }

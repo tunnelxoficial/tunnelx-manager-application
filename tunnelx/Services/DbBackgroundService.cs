@@ -51,6 +51,13 @@ namespace tunnelx.Services
         /// a CHAVE PRIVADA de cada cliente no banco, e o banco esta num IP
         /// publico. Sem TLS, cada chave atravessa a internet em claro.
         /// </summary>
+        /// <summary>
+        /// A mesma cadeia usada pelo ciclo: variavel de ambiente, App.config e,
+        /// por ultimo, o valor embutido. Exposta para quem precisa falar com o
+        /// banco fora do ciclo — duplicar a cadeia daria duas verdades.
+        /// </summary>
+        public static string StringDeConexao { get { return ConnectionString; } }
+
         private static string ConnectionString
         {
             get
@@ -440,15 +447,18 @@ namespace tunnelx.Services
 
             string jsonPath = Path.Combine(dirPath, "client.json");
             
-            // Simple JSON construction to avoid external dependency if not needed, 
-            // matching the format TunnelManager expects.
-            string jsonContent = $@"{{
-  ""nome"": ""{client.Name}"",
-  ""publicKey"": ""{publicKey}"",
-  ""address"": ""{addressCidr}"",
-  ""enabled"": true,
-  ""created_at"": ""{DateTime.Now:O}""
-}}";
+            // O nome vem do banco, ou seja, do cadastro publico. Interpolado cru,
+            // um nome com aspas nao so quebra o arquivo: como ele e relido por
+            // WriteServerConfFromClients para montar o TunnelX.conf, daria para
+            // injetar publicKey ou AllowedIPs de terceiros no tunel.
+            string jsonContent = "{\n" +
+                "  \"nome\": \"" + Json.Escapar(client.Name) + "\",\n" +
+                "  \"publicKey\": \"" + Json.Escapar(publicKey) + "\",\n" +
+                "  \"address\": \"" + Json.Escapar(addressCidr) + "\",\n" +
+                "  \"connectionId\": " + client.Id + ",\n" +
+                "  \"enabled\": true,\n" +
+                "  \"created_at\": \"" + DateTime.Now.ToString("O") + "\"\n" +
+                "}\n";
             File.WriteAllText(jsonPath, jsonContent);
         }
 

@@ -64,8 +64,13 @@ namespace tunnelx
             this.tmrStatus = new System.Windows.Forms.Timer(this.components);
             this.groupBox3 = new System.Windows.Forms.GroupBox();
             this.dtgConexoesAtivas = new System.Windows.Forms.DataGridView();
+            this.painelBusca = new System.Windows.Forms.Panel();
+            this.txtBusca = new System.Windows.Forms.TextBox();
+            this.lblResultado = new System.Windows.Forms.Label();
             this.colActions = new System.Windows.Forms.DataGridViewButtonColumn();
             this.colClient = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colPlano = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colOrigem = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colPeer = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colEndpoint = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.colHandshake = new System.Windows.Forms.DataGridViewTextBoxColumn();
@@ -78,6 +83,7 @@ namespace tunnelx
             this.groupBox2.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).BeginInit();
             this.groupBox3.SuspendLayout();
+            this.painelBusca.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.dtgConexoesAtivas)).BeginInit();
             this.mainLayout.SuspendLayout();
             this.headerPanel.SuspendLayout();
@@ -465,6 +471,7 @@ namespace tunnelx
             // groupBox3
             // 
             this.groupBox3.Controls.Add(this.dtgConexoesAtivas);
+            this.groupBox3.Controls.Add(this.painelBusca);
             this.groupBox3.Dock = System.Windows.Forms.DockStyle.Fill;
             this.groupBox3.Location = new System.Drawing.Point(263, 3);
             this.groupBox3.Name = "groupBox3";
@@ -494,6 +501,8 @@ namespace tunnelx
             this.dtgConexoesAtivas.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
             this.dtgConexoesAtivas.Columns.AddRange(new System.Windows.Forms.DataGridViewColumn[] {
             this.colClient,
+            this.colPlano,
+            this.colOrigem,
             this.colPeer,
             this.colEndpoint,
             this.colHandshake,
@@ -541,6 +550,18 @@ namespace tunnelx
             this.colClient.Name = "colClient";
             this.colClient.ReadOnly = true;
             // 
+            // colPlano
+            // 
+            this.colPlano.HeaderText = "Plano";
+            this.colPlano.Name = "colPlano";
+            this.colPlano.ReadOnly = true;
+            // 
+            // colOrigem
+            // 
+            this.colOrigem.HeaderText = "Origem";
+            this.colOrigem.Name = "colOrigem";
+            this.colOrigem.ReadOnly = true;
+            // 
             // colEndpoint
             // 
             this.colEndpoint.HeaderText = "Endpoint";
@@ -564,6 +585,33 @@ namespace tunnelx
             this.colTx.HeaderText = "Tx";
             this.colTx.Name = "colTx";
             this.colTx.ReadOnly = true;
+            // 
+            // painelBusca
+            // 
+            this.painelBusca.Controls.Add(this.txtBusca);
+            this.painelBusca.Controls.Add(this.lblResultado);
+            this.painelBusca.Dock = System.Windows.Forms.DockStyle.Top;
+            this.painelBusca.Name = "painelBusca";
+            this.painelBusca.Padding = new System.Windows.Forms.Padding(6, 6, 6, 4);
+            this.painelBusca.Size = new System.Drawing.Size(478, 42);
+            this.painelBusca.TabIndex = 0;
+            // 
+            // txtBusca
+            // 
+            this.txtBusca.BorderStyle = System.Windows.Forms.BorderStyle.None;
+            this.txtBusca.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.txtBusca.Name = "txtBusca";
+            this.txtBusca.TabIndex = 0;
+            this.txtBusca.TextChanged += new System.EventHandler(this.txtBusca_TextChanged);
+            this.txtBusca.KeyDown += new System.Windows.Forms.KeyEventHandler(this.txtBusca_KeyDown);
+            // 
+            // lblResultado
+            // 
+            this.lblResultado.Dock = System.Windows.Forms.DockStyle.Right;
+            this.lblResultado.Name = "lblResultado";
+            this.lblResultado.Size = new System.Drawing.Size(96, 32);
+            this.lblResultado.TabIndex = 1;
+            this.lblResultado.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
             // 
             // mainLayout
             // 
@@ -604,7 +652,7 @@ namespace tunnelx
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 17F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.BackColor = System.Drawing.Color.White;
-            this.ClientSize = new System.Drawing.Size(1060, 640);
+            this.ClientSize = new System.Drawing.Size(1280, 680);
             this.Controls.Add(this.mainLayout);
             this.Controls.Add(this.headerPanel);
             this.Controls.Add(this.linkLabel2);
@@ -612,7 +660,7 @@ namespace tunnelx
             this.Font = new System.Drawing.Font("Segoe UI", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(60)))), ((int)(((byte)(60)))), ((int)(((byte)(60)))));
             this.Margin = new System.Windows.Forms.Padding(3, 4, 3, 4);
-            this.MinimumSize = new System.Drawing.Size(900, 580);
+            this.MinimumSize = new System.Drawing.Size(1040, 600);
             this.Name = "frmDefault";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "Fomulário de MVP do TunnelX";
@@ -622,6 +670,8 @@ namespace tunnelx
             this.groupBox2.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox1)).EndInit();
             this.groupBox3.ResumeLayout(false);
+            this.painelBusca.ResumeLayout(false);
+            this.painelBusca.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)(this.dtgConexoesAtivas)).EndInit();
             this.mainLayout.ResumeLayout(false);
             this.headerPanel.ResumeLayout(false);
@@ -664,6 +714,11 @@ namespace tunnelx
         private System.Windows.Forms.DataGridViewButtonColumn colActions;
         private System.Windows.Forms.DataGridViewTextBoxColumn colPeer;
         private System.Windows.Forms.DataGridViewTextBoxColumn colClient;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colPlano;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colOrigem;
+        private System.Windows.Forms.Panel painelBusca;
+        private System.Windows.Forms.TextBox txtBusca;
+        private System.Windows.Forms.Label lblResultado;
         private System.Windows.Forms.DataGridViewTextBoxColumn colEndpoint;
         private System.Windows.Forms.DataGridViewTextBoxColumn colHandshake;
         private System.Windows.Forms.DataGridViewTextBoxColumn colRx;

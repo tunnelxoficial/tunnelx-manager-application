@@ -89,6 +89,9 @@ namespace tunnelx.Services
             var foto = c as PictureBox;
             if (foto != null) { VestirLogo(foto); return; }
 
+            var campo = c as TextBox;
+            if (campo != null) { VestirCampo(campo); return; }
+
             if (c is Panel || c is TableLayoutPanel || c is FlowLayoutPanel)
             {
                 VestirPainel(c);
@@ -189,7 +192,7 @@ namespace tunnelx.Services
             g.DefaultCellStyle.SelectionBackColor = Cor(0x17335C);
             g.DefaultCellStyle.SelectionForeColor = Texto;
             g.DefaultCellStyle.Font = new Font(FonteUi, 9F);
-            g.DefaultCellStyle.Padding = new Padding(6, 0, 6, 0);
+            g.DefaultCellStyle.Padding = new Padding(5, 0, 5, 0);
             g.AlternatingRowsDefaultCellStyle.BackColor = SuperficieAlt;
             g.AlternatingRowsDefaultCellStyle.SelectionBackColor = Cor(0x17335C);
 
@@ -204,37 +207,45 @@ namespace tunnelx.Services
                 switch (col.Name)
                 {
                     case "colActions":
-                        col.FillWeight = 38;
+                        col.FillWeight = 40;
                         col.HeaderText = string.Empty;
                         break;
 
                     case "colClient":
-                        col.FillWeight = 150;
+                        col.FillWeight = 148;
+                        break;
+
+                    case "colPlano":
+                        col.FillWeight = 100;
+                        break;
+
+                    case "colOrigem":
+                        col.FillWeight = 168;
                         break;
 
                     case "colPeer":
                         col.HeaderText = "IP";
-                        col.FillWeight = 95;
-                        col.DefaultCellStyle.Font = new Font(FonteNumero, 8.5F);
+                        col.FillWeight = 76;
+                        col.DefaultCellStyle.Font = new Font(FonteNumero, 8F);
                         col.DefaultCellStyle.ForeColor = TextoFraco;
                         break;
 
                     case "colEndpoint":
-                        col.FillWeight = 148;
-                        col.DefaultCellStyle.Font = new Font(FonteNumero, 8.5F);
+                        col.FillWeight = 132;
+                        col.DefaultCellStyle.Font = new Font(FonteNumero, 8F);
                         break;
 
                     case "colHandshake":
                         // "Handshake" nao cabe e nao diz nada a quem opera.
                         col.HeaderText = "Visto";
-                        col.FillWeight = 52;
+                        col.FillWeight = 50;
                         col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
                         break;
 
                     case "colRx":
                     case "colTx":
-                        col.FillWeight = 86;
-                        col.DefaultCellStyle.Font = new Font(FonteNumero, 8.5F);
+                        col.FillWeight = 76;
+                        col.DefaultCellStyle.Font = new Font(FonteNumero, 8F);
                         col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
                         // O cabecalho acompanha os numeros, senao a coluna fica torta.
                         col.HeaderCell.Style.Alignment = DataGridViewContentAlignment.MiddleRight;
@@ -270,6 +281,12 @@ namespace tunnelx.Services
             var g = (DataGridView)sender;
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
 
+            if (g.Columns[e.ColumnIndex] is DataGridViewButtonColumn)
+            {
+                PintarAcoes(e);
+                return;
+            }
+
             if (g.Columns[e.ColumnIndex] is DataGridViewCheckBoxColumn)
             {
                 PintarCaixaDeSelecao(e);
@@ -277,6 +294,12 @@ namespace tunnelx.Services
             }
 
             var coluna = g.Columns[e.ColumnIndex].Name;
+            if (coluna == "colOrigem")
+            {
+                PintarOrigem(e, g.Rows[e.RowIndex]);
+                return;
+            }
+
             if (coluna != "colClient" && coluna != "colHandshake") return;
 
             var peer = GradeConexoes.PeerDaLinha(g.Rows[e.RowIndex]);
@@ -326,6 +349,32 @@ namespace tunnelx.Services
         }
 
         /// <summary>
+        /// Tres pontos, sem moldura de botao.
+        /// </summary>
+        /// <remarks>
+        /// O botao nativo desenha uma moldura em cada linha. Numa lista de trinta,
+        /// sao trinta retangulos disputando atencao com o conteudo — e abrir o menu
+        /// nao e a acao principal de quem esta lendo a tela.
+        /// </remarks>
+        private static void PintarAcoes(DataGridViewCellPaintingEventArgs e)
+        {
+            e.PaintBackground(e.CellBounds, true);
+
+            var suave = e.Graphics.SmoothingMode;
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            var cy = e.CellBounds.Top + e.CellBounds.Height / 2 - 1;
+            var cx = e.CellBounds.Left + e.CellBounds.Width / 2 - 7;
+
+            using (var ponto = new SolidBrush(TextoFraco))
+                for (var i = 0; i < 3; i++)
+                    e.Graphics.FillEllipse(ponto, cx + i * 6, cy, 3, 3);
+
+            e.Graphics.SmoothingMode = suave;
+            e.Handled = true;
+        }
+
+        /// <summary>
         /// Caixa de selecao desenhada a mao.
         /// </summary>
         /// <remarks>
@@ -366,6 +415,83 @@ namespace tunnelx.Services
                 }
 
             e.Graphics.SmoothingMode = suave;
+            e.Handled = true;
+        }
+
+        /// <summary>
+        /// Desenha a origem: um selo para convidado, texto apagado para titular.
+        /// </summary>
+        /// <remarks>
+        /// O selo existe porque essa e a pergunta que se faz varrendo a lista com
+        /// o olho — "de quem e esse acesso?" — e uma palavra no meio de texto do
+        /// mesmo peso nao se destaca. As palavras sao as do aplicativo:
+        /// "Convidado" e "Titular", nunca um vocabulario novo.
+        /// </remarks>
+        private static void PintarOrigem(DataGridViewCellPaintingEventArgs e, DataGridViewRow linha)
+        {
+            var peer = GradeConexoes.PeerDaLinha(linha);
+            if (peer == null) return;   // linha de aviso
+
+            e.PaintBackground(e.CellBounds, true);
+
+            var selecionada = e.State.HasFlag(DataGridViewElementStates.Selected);
+
+            if (peer.Ficha == null || !peer.Ficha.Convidado)
+            {
+                TextRenderer.DrawText(
+                    e.Graphics, e.FormattedValue as string ?? string.Empty, e.CellStyle.Font,
+                    new Rectangle(e.CellBounds.Left + 6, e.CellBounds.Top,
+                                  e.CellBounds.Width - 12, e.CellBounds.Height),
+                    selecionada ? e.CellStyle.SelectionForeColor : TextoFraco,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+
+                e.Handled = true;
+                return;
+            }
+
+            var vencido = peer.PrazoVencido(DateTime.Now);
+            var cor = vencido ? Vermelho : Cor(0x9B7BFF);
+            var rotulo = vencido ? "VENCIDO" : "CONVIDADO";
+
+            var fonte = new Font(FonteUi, 7.5F, FontStyle.Bold);
+            try
+            {
+                var suave = e.Graphics.SmoothingMode;
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+                var largura = TextRenderer.MeasureText(e.Graphics, rotulo, fonte).Width + 12;
+                var selo = new Rectangle(e.CellBounds.Left + 6,
+                                         e.CellBounds.Top + (e.CellBounds.Height - 17) / 2,
+                                         largura, 17);
+
+                using (var caminho = Arredondado(selo, 8))
+                {
+                    using (var fundo = new SolidBrush(Color.FromArgb(46, cor))) e.Graphics.FillPath(fundo, caminho);
+                    using (var borda = new Pen(Color.FromArgb(120, cor))) e.Graphics.DrawPath(borda, caminho);
+                }
+
+                TextRenderer.DrawText(e.Graphics, rotulo, fonte, selo, cor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+                e.Graphics.SmoothingMode = suave;
+
+                // Depois do selo vem o nome de quem emprestou o tunel.
+                var dono = string.IsNullOrWhiteSpace(peer.Ficha.Dono) ? string.Empty : peer.Ficha.Dono;
+                var sobra = new Rectangle(selo.Right + 6, e.CellBounds.Top,
+                                          e.CellBounds.Right - selo.Right - 10, e.CellBounds.Height);
+
+                if (sobra.Width > 20)
+                {
+                    TextRenderer.DrawText(e.Graphics, dono, e.CellStyle.Font, sobra,
+                        selecionada ? e.CellStyle.SelectionForeColor : TextoFraco,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+                }
+            }
+            finally
+            {
+                fonte.Dispose();
+            }
+
             e.Handled = true;
         }
 
@@ -620,10 +746,103 @@ namespace tunnelx.Services
             }
         }
 
+        // ---- busca -----------------------------------------------------------
+
+        /// <summary>Texto de apoio do campo de busca, quando ele esta vazio.</summary>
+        private const string DicaBusca = "Buscar por nome, CPF, plano, titular ou IP…";
+
+        private static void VestirCampo(TextBox campo)
+        {
+            campo.BorderStyle = BorderStyle.None;
+            campo.BackColor = Superficie;
+            campo.ForeColor = Texto;
+            campo.Font = new Font(FonteUi, 10F);
+
+            if (campo.Name != "txtBusca") return;
+
+            // O texto de dica e desenhado pelo Windows (EM_SETCUEBANNER) em vez de
+            // ser posto como Text: assim ele nao vira conteudo do campo e nao
+            // precisa ser limpo no foco — sem isso, o filtro passaria a procurar
+            // pela propria dica.
+            try { SendMessage(campo.Handle, 0x1501, (IntPtr)1, DicaBusca); }
+            catch { }
+
+            var painel = campo.Parent;
+            if (painel == null) return;
+
+            // A lupa e o espaco a esquerda dela sao desenhados pelo painel, nao por
+            // um controle proprio: um PictureBox ali roubaria o clique do campo.
+            painel.Padding = new Padding(34, 10, 10, 8);
+            painel.Paint -= PintarBusca;
+            painel.Paint += PintarBusca;
+            DuploBuffer(painel);
+
+            campo.GotFocus -= RepintarPai;
+            campo.GotFocus += RepintarPai;
+            campo.LostFocus -= RepintarPai;
+            campo.LostFocus += RepintarPai;
+        }
+
+        private static void RepintarPai(object sender, EventArgs e)
+        {
+            var c = sender as Control;
+            if (c != null && c.Parent != null) c.Parent.Invalidate();
+        }
+
+        /// <summary>Desenha o campo de busca: cartao arredondado com lupa.</summary>
+        private static void PintarBusca(object sender, PaintEventArgs e)
+        {
+            var painel = (Control)sender;
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            using (var limpa = new SolidBrush(Painel)) g.FillRectangle(limpa, painel.ClientRectangle);
+
+            var campo = painel.Controls["txtBusca"];
+            if (campo == null) return;
+
+            // O cartao envolve o campo, nao a faixa: o contador de resultados mora
+            // a direita e nao deve parecer parte da caixa de digitar.
+            var r = new Rectangle(4, 4,
+                                  campo.Right + painel.Padding.Right - 4,
+                                  painel.Height - 9);
+            if (r.Width <= 0 || r.Height <= 0) return;
+
+            var focado = campo.Focused;
+            var comTexto = campo.Text.Length > 0;
+
+            using (var caminho = Arredondado(r, 8))
+            {
+                using (var fundo = new SolidBrush(Superficie)) g.FillPath(fundo, caminho);
+                using (var borda = new Pen(focado ? Azul : Borda)) g.DrawPath(borda, caminho);
+            }
+
+            // Lupa: circulo mais cabo. Desenhada a mao para nao trazer imagem junto.
+            var cor = focado || comTexto ? Azul : TextoFraco;
+            using (var caneta = new Pen(cor, 1.6f))
+            {
+                var cx = r.Left + 13;
+                var cy = r.Top + r.Height / 2 - 1;
+                g.DrawEllipse(caneta, cx - 5, cy - 5, 9, 9);
+                g.DrawLine(caneta, cx + 3, cy + 3, cx + 7, cy + 7);
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern IntPtr SendMessage(IntPtr janela, int mensagem, IntPtr wParam, string lParam);
+
         // ---- rotulos e links -------------------------------------------------
 
         private static void VestirRotulo(Label l)
         {
+            if (l.Name == "lblResultado")
+            {
+                l.BackColor = Painel;
+                l.ForeColor = TextoFraco;
+                l.Font = new Font(FonteUi, 8.5F);
+                return;
+            }
+
             // Os separadores do cabecalho sao Labels de 1px de altura.
             if (l.Height <= 2)
             {

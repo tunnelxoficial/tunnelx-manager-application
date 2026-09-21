@@ -30,6 +30,11 @@ namespace tunnelx
         // parado do que respondendo. Era esse o travamento.
         private int _coletando;                 // 0/1 por Interlocked: uma coleta de cada vez
 
+        // O ultimo estado lido, guardado para o filtro poder ser aplicado no ato.
+        // Sem isto, digitar na busca so teria efeito no proximo ciclo — ate um
+        // segundo de atraso a cada tecla, que se sente como travamento.
+        private ConnectionSnapshot _ultimoSnapshot;
+
 
         #region ... MÉTODOS ...
 
@@ -458,13 +463,13 @@ namespace tunnelx
                 var path = Path.Combine(clientDir, "client-peer.conf");
                 File.WriteAllText(path, conf);
                 var meta = "{\n" +
-                           $"  \"nome\": \"{form.Nome}\",\n" +
-                           $"  \"celular\": \"{form.Celular}\",\n" +
-                           $"  \"email\": \"{form.Email}\",\n" +
-                           $"  \"cpf\": \"{form.Cpf}\",\n" +
-                           $"  \"publicKey\": \"{clientKeyPair.PublicKey}\",\n" +
-                           $"  \"privateKey\": \"{clientKeyPair.PrivateKey}\",\n" +
-                           $"  \"address\": \"{address}\",\n" +
+                           $"  \"nome\": \"{Services.Json.Escapar(form.Nome)}\",\n" +
+                           $"  \"celular\": \"{Services.Json.Escapar(form.Celular)}\",\n" +
+                           $"  \"email\": \"{Services.Json.Escapar(form.Email)}\",\n" +
+                           $"  \"cpf\": \"{Services.Json.Escapar(form.Cpf)}\",\n" +
+                           $"  \"publicKey\": \"{Services.Json.Escapar(clientKeyPair.PublicKey)}\",\n" +
+                           $"  \"privateKey\": \"{Services.Json.Escapar(clientKeyPair.PrivateKey)}\",\n" +
+                           $"  \"address\": \"{Services.Json.Escapar(address)}\",\n" +
                            $"  \"enabled\": true\n" +
                            "}";
                 File.WriteAllText(Path.Combine(clientDir, "client.json"), meta);
@@ -504,13 +509,13 @@ namespace tunnelx
                     var pathPng = Path.Combine(clientDir, "client-peer.png");
                     File.WriteAllBytes(pathPng, png);
                     var meta = "{\n" +
-                               $"  \"nome\": \"{form.Nome}\",\n" +
-                               $"  \"celular\": \"{form.Celular}\",\n" +
-                               $"  \"email\": \"{form.Email}\",\n" +
-                               $"  \"cpf\": \"{form.Cpf}\",\n" +
-                               $"  \"publicKey\": \"{clientKeyPair.PublicKey}\",\n" +
-                               $"  \"privateKey\": \"{clientKeyPair.PrivateKey}\",\n" +
-                               $"  \"address\": \"{address}\",\n" +
+                               $"  \"nome\": \"{Services.Json.Escapar(form.Nome)}\",\n" +
+                               $"  \"celular\": \"{Services.Json.Escapar(form.Celular)}\",\n" +
+                               $"  \"email\": \"{Services.Json.Escapar(form.Email)}\",\n" +
+                               $"  \"cpf\": \"{Services.Json.Escapar(form.Cpf)}\",\n" +
+                               $"  \"publicKey\": \"{Services.Json.Escapar(clientKeyPair.PublicKey)}\",\n" +
+                               $"  \"privateKey\": \"{Services.Json.Escapar(clientKeyPair.PrivateKey)}\",\n" +
+                               $"  \"address\": \"{Services.Json.Escapar(address)}\",\n" +
                                $"  \"enabled\": true\n" +
                                "}";
                     File.WriteAllText(Path.Combine(clientDir, "client.json"), meta);
@@ -656,14 +661,58 @@ namespace tunnelx
             });
         }
 
+        /// <summary>
+        /// Redesenha a grade a partir do ultimo estado lido, aplicando a busca.
+        /// </summary>
+        /// <remarks>
+        /// Separado de AplicarSnapshot porque tem dois gatilhos com ritmos bem
+        /// diferentes: o ciclo de um segundo e cada tecla digitada na busca.
+        /// </remarks>
+        private void DesenharGrade()
+        {
+            if (_ultimoSnapshot == null) return;
+
+            var filtro = txtBusca == null ? null : txtBusca.Text;
+            var mostradas = Services.GradeConexoes.Reconciliar(dtgConexoesAtivas, _ultimoSnapshot, filtro);
+            var total = _ultimoSnapshot.Peers.Count;
+
+            if (lblResultado != null)
+            {
+                lblResultado.Text = string.IsNullOrWhiteSpace(filtro)
+                    ? (total == 1 ? "1 conexao" : total + " conexoes")
+                    : mostradas + " de " + total;
+            }
+
+            dtgConexoesAtivas.Visible = true;
+        }
+
+        private void txtBusca_TextChanged(object sender, EventArgs e)
+        {
+            DesenharGrade();
+        }
+
+        private void txtBusca_KeyDown(object sender, KeyEventArgs e)
+        {
+            // Esc limpa a busca: e o gesto que todo mundo tenta primeiro.
+            if (e.KeyCode != Keys.Escape) return;
+
+            txtBusca.Clear();
+            e.SuppressKeyPress = true;
+        }
+
         private void AplicarSnapshot(ConnectionSnapshot snap, bool tunelAtivo)
         {
             if (IsDisposed) return;
 
+            _ultimoSnapshot = snap;
+
             ValidaConexao(tunelAtivo);
-            Services.GradeConexoes.Reconciliar(dtgConexoesAtivas, snap);
+            DesenharGrade();
+
+            // Os selos contam o estado INTEIRO do servidor, nunca o que sobrou do
+            // filtro: eles respondem "como esta o tunel", e essa resposta nao pode
+            // mudar porque alguem digitou um nome na busca.
             Services.Tema.AtualizarResumo(groupBox3, snap);
-            dtgConexoesAtivas.Visible = true;
         }
 
 
@@ -712,9 +761,59 @@ namespace tunnelx
                 };
                 menu.Items.Add(enableItem);
             }
+            menu.Items.Add(new ToolStripSeparator());
+
+            var excluir = new ToolStripMenuItem("Excluir conexão");
+            excluir.Click += (s2, ev) => ExcluirConexao(peer);
+            menu.Items.Add(excluir);
+
             var cellRect = dtgConexoesAtivas.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, true);
             var point = dtgConexoesAtivas.PointToScreen(new System.Drawing.Point(cellRect.Left, cellRect.Bottom));
             menu.Show(point);
+        }
+
+        /// <summary>
+        /// Exclui a conexao de vez: do banco, do tunel e do disco.
+        /// </summary>
+        /// <remarks>
+        /// Pede confirmacao porque nao ha desfazer: a chave privada do cliente
+        /// morre junto com a pasta, entao nem reprovisionar devolve o mesmo acesso
+        /// — a pessoa precisa receber um .conf novo.
+        /// </remarks>
+        private void ExcluirConexao(Services.ConnectionSnapshot.PeerRow peer)
+        {
+            if (peer == null) return;
+
+            var doSistema = !string.IsNullOrEmpty(peer.Pasta) &&
+                            System.IO.Path.GetFileName(peer.Pasta)
+                                  .StartsWith("dev_", StringComparison.OrdinalIgnoreCase);
+
+            var aviso =
+                "Excluir a conexão de " + peer.Name + "?\n\n" +
+                "• o peer sai do túnel e o acesso para na hora\n" +
+                "• a pasta do cliente e a chave dele são apagadas\n" +
+                (doSistema
+                    ? "• o acesso é revogado no sistema, e o aplicativo do cliente\n" +
+                      "  deixa de mostrar este túnel\n"
+                    : "• este cliente foi gerado pela tela e não tem cadastro;\n" +
+                      "  nada muda no painel\n") +
+                "\nNão há como desfazer.";
+
+            var resposta = MessageBox.Show(aviso, "Excluir conexão",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+
+            if (resposta != DialogResult.Yes) return;
+
+            Cursor = Cursors.WaitCursor;
+            Services.Exclusao.Resultado r;
+            try { r = Services.Exclusao.Excluir(peer); }
+            finally { Cursor = Cursors.Default; }
+
+            MessageBox.Show(r.Mensagem, r.Excluiu ? "Pronto" : "Não foi possível",
+                MessageBoxButtons.OK,
+                r.Excluiu ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+
+            UpdateActiveConnections();
         }
 
         private struct PeerRow
