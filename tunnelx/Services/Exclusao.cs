@@ -82,8 +82,10 @@ namespace tunnelx.Services
                 };
             }
 
-            if (!string.IsNullOrWhiteSpace(peer.Address))
-                TunnelManager.BlockClientInternet(peer.Address);
+            // O corte real e a saida do peer do tunel (RemovePeer, acima). Aqui havia
+            // uma chamada a BlockClientInternet, que criava regras de firewall do
+            // Windows — e nunca bloqueou nada: o firewall filtra o que TERMINA na
+            // maquina, e o trafego do cliente e roteado/NATeado. So acumulava regras.
 
             // 3. Disco, e so entao reescreve o TunnelX.conf — ele e montado a partir
             //    do que sobrou nas pastas.

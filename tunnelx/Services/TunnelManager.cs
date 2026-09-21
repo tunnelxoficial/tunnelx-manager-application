@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -639,6 +640,17 @@ PersistentKeepalive = 15
             }
         }
 
+        /// <summary>
+        /// Liga/desliga um cliente no disco, procurando-o pela chave publica.
+        /// </summary>
+        /// <remarks>
+        /// A gravacao em si esta em DefinirEnabledNaPasta; aqui so mora a busca.
+        /// Eram duas copias da mesma cirurgia de linha, e a copia deste lado
+        /// trocava a linha sem preservar a virgula do fim — o que transformava o
+        /// client.json em JSON invalido toda vez que um cliente era desativado.
+        /// Os leitores daqui sao linha a linha e nao reclamavam, entao o estrago
+        /// so apareceria para quem abrisse o arquivo com um parser de verdade.
+        /// </remarks>
         public static void SetClientEnabledByPublicKey(string publicKey, bool enabled)
         {
             try
@@ -647,38 +659,19 @@ PersistentKeepalive = 15
                 {
                     var json = System.IO.Path.Combine(dir, "client.json");
                     if (!File.Exists(json)) continue;
-                    var txt = File.ReadAllText(json);
-                    var pkLine = txt.Split('\n').FirstOrDefault(l => l.IndexOf("\"publicKey\"", StringComparison.OrdinalIgnoreCase) >= 0);
-                    if (pkLine == null) continue;
-                    var pkIdx = pkLine.IndexOf(':');
-                    var pk = pkLine.Substring(pkIdx + 1).Trim().Trim('"', ',', ' ');
-                    if (!string.Equals(pk, publicKey, StringComparison.OrdinalIgnoreCase)) continue;
-                    var lines = txt.Split('\n').ToList();
-                    int foundEnabled = -1;
-                    for (int i = 0; i < lines.Count; i++)
-                    {
-                        if (lines[i].IndexOf("\"enabled\"", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            foundEnabled = i; break;
-                        }
-                    }
-                    var newLine = $"  \"enabled\": {(enabled ? "true" : "false")}";
-                    if (foundEnabled >= 0)
-                    {
-                        lines[foundEnabled] = newLine;
-                    }
-                    else
-                    {
-                        if (lines.Count > 0 && lines[lines.Count - 1].Trim() == "}")
-                            lines.Insert(lines.Count - 1, newLine + ",");
-                        else
-                            lines.Add(newLine);
-                    }
-                    File.WriteAllText(json, string.Join("\n", lines));
+
+                    string pk;
+                    if (!Json.LerObjeto(File.ReadAllText(json)).TryGetValue("publicKey", out pk)) continue;
+                    if (!string.Equals(pk, publicKey, StringComparison.Ordinal)) continue;
+
+                    DefinirEnabledNaPasta(dir, enabled);
                     return;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Aviso("nao foi possivel mudar enabled de " + publicKey + ": " + ex.Message);
+            }
         }
 
         /// <summary>
@@ -784,6 +777,132 @@ PersistentKeepalive = 15
             }
             catch
             {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// As chaves publicas que estao no tunel AGORA, lidas de uma vez so.
+        /// </summary>
+        /// <remarks>
+        /// PeerExists dispara um wg.exe por consulta. Perguntar por N clientes
+        /// custa N processos, e a reconciliacao pergunta por todos a cada ciclo —
+        /// e exatamente a armadilha O(N^2) que ja travou a grade de conexoes.
+        /// Aqui a saida do wg show e lida uma vez e vira conjunto.
+        /// </remarks>
+        public static HashSet<string> ChavesNoTunel()
+        {
+            return ChavesDoStatus(GetWgStatus());
+        }
+
+        /// <summary>
+        /// O parse puro da saida do wg show, separado da execucao do processo.
+        /// </summary>
+        /// <remarks>
+        /// Separado para poder ser testado sem tocar em tunel nenhum: este metodo
+        /// decide quem fica sem internet, e um engano aqui corta cliente pagante.
+        /// </remarks>
+        public static HashSet<string> ChavesDoStatus(string status)
+        {
+            var chaves = new HashSet<string>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(status)) return chaves;
+
+            foreach (var bruta in status.Replace("\r\n", "\n").Split('\n'))
+            {
+                var linha = bruta.Trim();
+                if (!linha.StartsWith("peer:", StringComparison.OrdinalIgnoreCase)) continue;
+
+                var chave = linha.Substring(5).Trim();
+                if (chave.Length > 0) chaves.Add(chave);
+            }
+
+            return chaves;
+        }
+
+        /// <summary>
+        /// Grava o enabled do client.json de UMA pasta ja conhecida.
+        /// </summary>
+        /// <remarks>
+        /// SetClientEnabledByPublicKey varre todas as pastas para achar a chave.
+        /// Quem ja tem a pasta em maos nao precisa dessa varredura — e a
+        /// reconciliacao tem, porque foi a pasta que a levou ate o cliente.
+        ///
+        /// Isto e o que faz o corte sobreviver a um restart do tunel:
+        /// WriteServerConfFromClients so poe no .conf quem tem enabled == true.
+        /// Sem gravar aqui, o bloqueio valeria so em memoria e o primeiro
+        /// reinicio do servico devolveria a internet ao cliente cortado.
+        /// </remarks>
+        /// <returns>true se o arquivo mudou.</returns>
+        public static bool DefinirEnabledNaPasta(string pasta, bool enabled)
+        {
+            try
+            {
+                var json = System.IO.Path.Combine(pasta, "client.json");
+                if (!File.Exists(json)) return false;
+
+                var linhas = File.ReadAllText(json).Replace("\r\n", "\n").Split('\n').ToList();
+                var alvo = -1;
+
+                for (var i = 0; i < linhas.Count; i++)
+                {
+                    if (linhas[i].IndexOf("\"enabled\"", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        alvo = i;
+                        break;
+                    }
+                }
+
+                var valor = enabled ? "true" : "false";
+                var nova = "  \"enabled\": " + valor;
+
+                if (alvo >= 0)
+                {
+                    if (linhas[alvo].IndexOf(valor, StringComparison.Ordinal) >= 0) return false;
+                    var terminava = linhas[alvo].TrimEnd().EndsWith(",");
+                    linhas[alvo] = terminava ? nova + "," : nova;
+                }
+                else
+                {
+                    /*
+                     * O campo nao existe: entra como ULTIMA propriedade.
+                     *
+                     * Procurar o fecha-chaves de tras para frente, e nao na ultima
+                     * linha: o arquivo termina com quebra de linha, entao a ultima
+                     * linha e vazia.
+                     *
+                     * E a propriedade que estava em ultimo lugar passa a precisar
+                     * de virgula. Inserir sem isso — e ainda por cima com virgula
+                     * na nova, que agora e a ultima — produzia JSON invalido nos
+                     * dois pontos.
+                     */
+                    var fecha = -1;
+                    for (var i = linhas.Count - 1; i >= 0; i--)
+                    {
+                        if (linhas[i].Trim() == "}") { fecha = i; break; }
+                    }
+                    if (fecha <= 0) return false;   // formato inesperado
+
+                    var anterior = -1;
+                    for (var i = fecha - 1; i >= 0; i--)
+                    {
+                        if (linhas[i].Trim().Length > 0) { anterior = i; break; }
+                    }
+                    if (anterior < 0) return false;
+
+                    var cauda = linhas[anterior].TrimEnd();
+                    // Depois de "{" nao vai virgula: o objeto estava vazio.
+                    if (!cauda.EndsWith(",") && !cauda.EndsWith("{"))
+                        linhas[anterior] = cauda + ",";
+
+                    linhas.Insert(fecha, nova);
+                }
+
+                File.WriteAllText(json, string.Join("\n", linhas));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Aviso("nao foi possivel gravar enabled em " + pasta + ": " + ex.Message);
                 return false;
             }
         }
@@ -913,114 +1032,7 @@ PersistentKeepalive = 15
             }
         }
 
-        /// <summary>
-        /// Apaga TODAS as regras de firewall com este nome.
-        /// </summary>
-        /// <remarks>
-        /// Rules.Remove(nome) tira uma ocorrencia por chamada. Conta primeiro e
-        /// repete o numero exato: enumerar a colecao COM a cada volta ficaria caro
-        /// justamente no caso que interessa, o de muitas regras acumuladas.
-        /// </remarks>
-        private static void RemoverRegrasPorNome(INetFwPolicy2 policy2, string nome)
-        {
-            int quantas;
-            try
-            {
-                quantas = policy2.Rules.Cast<INetFwRule>().Count(
-                    r => string.Equals(r.Name, nome, StringComparison.OrdinalIgnoreCase));
-            }
-            catch { return; }
-
-            for (var i = 0; i < quantas; i++)
-            {
-                try { policy2.Rules.Remove(nome); } catch { return; }
-            }
-        }
-
-        public static void BlockClientInternet(string addressCidr)
-        {
-            try
-            {
-                var ip = addressCidr;
-                var slash = ip.IndexOf('/');
-                if (slash > 0) ip = ip.Substring(0, slash);
-                var ruleNameOut = $"TunnelX BLOCK OUT {ip}";
-                var ruleNameIn = $"TunnelX BLOCK IN {ip}";
-                var ifaceGuid = GetWireGuardInterfaceGuid();
-                if (string.IsNullOrWhiteSpace(ifaceGuid)) return;
-                if (!ifaceGuid.StartsWith("{")) ifaceGuid = "{" + ifaceGuid + "}";
-                if (!ifaceGuid.EndsWith("}")) ifaceGuid = ifaceGuid + "}";
-                var policy2 = (INetFwPolicy2)Activator.CreateInstance(
-                    Type.GetTypeFromProgID("HNetCfg.FwPolicy2"));
-                // O Windows aceita regras de nomes repetidos. Este metodo habilitava
-                // as que ja existiam e mesmo assim acrescentava outras duas — toda
-                // chamada somava mais um par, para sempre. Como o chamador aqui era
-                // RestoreAfterTunnelRestart, que rodava a cada poucos segundos por
-                // causa do laco de reinstalacao do tunel, o firewall acumulava
-                // milhares de regras identicas. E o firewall avalia a lista inteira
-                // a cada conexao nova.
-                //
-                // Apagar antes de acrescentar deixa exatamente um par por cliente.
-                RemoverRegrasPorNome(policy2, ruleNameOut);
-                RemoverRegrasPorNome(policy2, ruleNameIn);
-                var rule = (INetFwRule)Activator.CreateInstance(
-                    Type.GetTypeFromProgID("HNetCfg.FWRule"));
-                rule.Name = ruleNameOut;
-                rule.Direction = (NetFwTypeLib.NET_FW_RULE_DIRECTION_)NET_FW_RULE_DIRECTION_.NET_FW_RULE_DIR_OUT;
-                rule.Action = (NetFwTypeLib.NET_FW_ACTION_)NET_FW_ACTION_.NET_FW_ACTION_BLOCK;
-                rule.Enabled = true;
-                rule.Protocol = (int)NET_FW_IP_PROTOCOL_.NET_FW_IP_PROTOCOL_ANY;
-                rule.RemoteAddresses = ip;
-                rule.Interfaces = new object[] { ifaceGuid };
-                policy2.Rules.Add(rule);
-                var rule2 = (INetFwRule)Activator.CreateInstance(
-                    Type.GetTypeFromProgID("HNetCfg.FWRule"));
-                rule2.Name = ruleNameIn;
-                rule2.Direction = (NetFwTypeLib.NET_FW_RULE_DIRECTION_)NET_FW_RULE_DIRECTION_.NET_FW_RULE_DIR_IN;
-                rule2.Action = (NetFwTypeLib.NET_FW_ACTION_)NET_FW_ACTION_.NET_FW_ACTION_BLOCK;
-                rule2.Enabled = true;
-                rule2.Protocol = (int)NET_FW_IP_PROTOCOL_.NET_FW_IP_PROTOCOL_ANY;
-                rule2.RemoteAddresses = ip;
-                rule2.Interfaces = new object[] { ifaceGuid };
-                policy2.Rules.Add(rule2);
-            }
-            catch { }
-        }
-
-        public static void UnblockClientInternet(string addressCidr)
-        {
-            try
-            {
-                var ip = addressCidr;
-                var slash = ip.IndexOf('/');
-                if (slash > 0) ip = ip.Substring(0, slash);
-                var ruleNameOut = $"TunnelX BLOCK OUT {ip}";
-                var ruleNameIn = $"TunnelX BLOCK IN {ip}";
-                var policy2 = (INetFwPolicy2)Activator.CreateInstance(
-                    Type.GetTypeFromProgID("HNetCfg.FwPolicy2"));
-                foreach (INetFwRule r in policy2.Rules.Cast<INetFwRule>().ToList())
-                {
-                    if (string.Equals(r.Name, ruleNameOut, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(r.Name, ruleNameIn, StringComparison.OrdinalIgnoreCase))
-                    {
-                        policy2.Rules.Remove(r.Name);
-                    }
-                }
-            }
-            catch { }
-        }
-
-        public static string GetWireGuardInterfaceGuid()
-        {
-            try
-            {
-                var ni = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
-                    .FirstOrDefault(n => string.Equals(n.Name, WireGuardInterfaceName, StringComparison.OrdinalIgnoreCase));
-                return ni?.Id;
-            }
-            catch { return null; }
-        }
-    }
+}
 
     // --- Enums da API de Firewall (se preferir, pode usar interop via referência COM) ---
     public enum NET_FW_PROFILE_TYPE2_

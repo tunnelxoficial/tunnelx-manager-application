@@ -266,6 +266,22 @@ namespace tunnelx.Services
                             DevolverParaFila(client.Id, conn);
                         }
                     }
+
+                    /*
+                     * Por ultimo: faz o tunel obedecer ao acesso decidido no painel.
+                     *
+                     * Depois de provisionar, e nao antes. Um peer criado neste mesmo
+                     * ciclo para um cliente cortado sai agora, em vez de ficar 60 s
+                     * com internet ate a proxima passada.
+                     */
+                    try
+                    {
+                        if (_devices != null) _devices.SincronizarBloqueios(conn);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error("falha ao sincronizar os bloqueios de acesso", ex);
+                    }
                 }
             }
             catch (InvalidOperationException ex)
@@ -409,7 +425,6 @@ namespace tunnelx.Services
                 throw new InvalidOperationException(
                     $"peer nao foi aplicado no tunel para a conexao {client.Id}");
             }
-            TunnelManager.UnblockClientInternet(clientIpCidr);
 
             // 8. Update Database
             // queue_attempts volta a zero: sem isso, uma conexao que falhou 4

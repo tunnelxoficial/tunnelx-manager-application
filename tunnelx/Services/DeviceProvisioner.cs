@@ -296,7 +296,6 @@ namespace tunnelx.Services
                     $"peer do aparelho {device.Id} nao foi aplicado no tunel");
             }
 
-            TunnelManager.UnblockClientInternet(endereco);
 
             var sql = @"UPDATE ConnectionDevices
                            SET public_key = @pk,
@@ -353,6 +352,242 @@ namespace tunnelx.Services
         /// pessoa removida continuaria navegando e a vaga do titular continuaria
         /// ocupada. E o mesmo vazamento que este produto ja teve.
         /// </summary>
+        /// <summary>
+        /// Faz o tunel obedecer ao acesso que o painel decidiu.
+        /// </summary>
+        /// <remarks>
+        /// Era o elo que faltava. Connections.internet existia e era escrito pelo
+        /// botao "bloquear internet" do painel, mas NENHUMA consulta deste
+        /// provisionador lia esse campo: o operador clicava, o icone ficava
+        /// vermelho na tela e o peer continuava no tunel. O cliente bloqueado
+        /// seguia navegando. Era o "nao funciona" relatado.
+        ///
+        /// O mesmo valia para inadimplencia: o webhook marcava OVERDUE, a API do
+        /// aplicativo devolvia 402 e fechava a TELA — mas o .conf ja estava no
+        /// aparelho e o peer no servidor, entao o devedor continuava com internet.
+        ///
+        /// Aqui o banco e a intencao e o wg show e o fato; a cada ciclo os dois sao
+        /// comparados e so a diferenca vira acao. Reconciliacao, e nao evento: uma
+        /// ordem perdida se conserta sozinha na passada seguinte, enquanto uma fila
+        /// de comandos a perderia para sempre.
+        ///
+        /// O corte e RemovePeer, nao regra de firewall: o Windows Firewall filtra o
+        /// que TERMINA na maquina e nao alcanca trafego roteado/NATeado. A volta e
+        /// AddPeer com a MESMA chave e o MESMO IP — o .conf e o QR que o cliente ja
+        /// tem continuam valendo, e a internet volta sozinha em segundos.
+        ///
+        /// Roda no FIM do ciclo, depois de provisionar: um peer recem-criado para
+        /// um cliente cortado sai no mesmo ciclo, e nao 60 s depois.
+        /// </remarks>
+        public void SincronizarBloqueios(SqlConnection conn)
+        {
+            try
+            {
+                // 1. A intencao, do banco.
+                var liberada = new Dictionary<int, bool>();
+                using (var cmd = new SqlCommand("SELECT id, internet FROM Connections", conn))
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        // NULL conta como liberada: na duvida por falta de dado, nao
+                        // se corta a internet de um cliente pagante.
+                        liberada[reader.GetInt32(0)] = reader.IsDBNull(1) || reader.GetBoolean(1);
+                    }
+                }
+
+                if (liberada.Count == 0) return;
+
+                // 2. O fato, numa leitura so.
+                var noTunel = TunnelManager.ChavesNoTunel();
+
+                var cortados = 0;
+                var devolvidos = 0;
+                var discoMudou = false;
+
+                foreach (var alvo in Reconciliaveis(conn))
+                {
+                    /*
+                     * Um cliente por vez, cada um no seu try.
+                     *
+                     * Com o try em volta do laco inteiro, um unico client.json
+                     * ilegivel interrompia a varredura — e sempre no mesmo ponto,
+                     * entao os clientes depois dele nunca eram reconciliados e
+                     * ninguem percebia.
+                     */
+                    try
+                    {
+                        bool deveTerAcesso;
+                        if (!liberada.TryGetValue(alvo.Conexao, out deveTerAcesso)) continue;
+
+                        var estaNoTunel = noTunel.Contains(alvo.Chave);
+
+                        if (deveTerAcesso != estaNoTunel)
+                        {
+                            if (deveTerAcesso)
+                            {
+                                if (string.IsNullOrWhiteSpace(alvo.Endereco))
+                                {
+                                    Log.Aviso($"conexao {alvo.Conexao}: sem endereco, nao da para devolver o peer");
+                                    continue;
+                                }
+
+                                if (!TunnelManager.AddPeer(alvo.Chave, alvo.Endereco))
+                                {
+                                    Log.Error($"conexao {alvo.Conexao}: peer NAO devolvido, tentando no proximo ciclo");
+                                    continue;
+                                }
+
+                                devolvidos++;
+                                Log.Info($"conexao {alvo.Conexao}: internet devolvida ({alvo.Endereco})");
+                            }
+                            else
+                            {
+                                if (!TunnelManager.RemovePeer(alvo.Chave))
+                                {
+                                    Log.Error($"conexao {alvo.Conexao}: peer NAO removido, tentando no proximo ciclo");
+                                    continue;
+                                }
+
+                                cortados++;
+                                Log.Info($"conexao {alvo.Conexao}: internet cortada");
+                            }
+                        }
+
+                        // O disco tem que concordar mesmo quando o tunel ja estava
+                        // certo: e o client.json que faz o estado sobreviver a um
+                        // restart do servico.
+                        if (alvo.Pasta != null && TunnelManager.DefinirEnabledNaPasta(alvo.Pasta, deveTerAcesso))
+                            discoMudou = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Aviso($"conexao {alvo.Conexao}: falha ao reconciliar o acesso: " + ex.Message);
+                    }
+                }
+
+                if (discoMudou) TunnelManager.WriteServerConfFromClients();
+
+                if (cortados > 0 || devolvidos > 0)
+                    Log.Info($"acesso: {cortados} cortado(s), {devolvidos} devolvido(s)");
+            }
+            catch (Exception ex)
+            {
+                // Falhar aqui nao pode parar o provisionamento, que e o que o cliente
+                // que acabou de pagar esta esperando.
+                Log.Aviso("nao foi possivel sincronizar os bloqueios: " + ex.Message);
+            }
+        }
+
+        /// <summary>Um peer que a reconciliacao sabe a qual conexao pertence.</summary>
+        private class AlvoAcesso
+        {
+            public int Conexao;
+            public string Chave;
+            public string Endereco;
+            /// <summary>Pasta do client.json, quando existe. Pode ser nula.</summary>
+            public string Pasta;
+        }
+
+        /// <summary>
+        /// Todos os peers cujo vinculo com uma conexao e conhecido.
+        /// </summary>
+        /// <remarks>
+        /// Duas origens, e a ordem importa.
+        ///
+        /// Os aparelhos do aplicativo saem do BANCO, que guarda chave, endereco e
+        /// ConnectionId nas proprias colunas. Antes esta varredura dependia da ficha
+        /// em meta.json para descobrir a conexao — e a ficha e cache de TELA: o
+        /// proprio ciclo a APAGA quando o casamento por CPF fica ambiguo. O efeito
+        /// era silencioso e exatamente do pior tipo: o corte deixava de ser aplicado
+        /// justamente aos clientes ambiguos, para sempre, sem nenhum erro no log.
+        ///
+        /// So as conexoes do modelo antigo, cujo peer vive apenas no disco, ainda
+        /// dependem da ficha — para elas nao existe outra fonte do vinculo.
+        /// </remarks>
+        private IEnumerable<AlvoAcesso> Reconciliaveis(SqlConnection conn)
+        {
+            var vistas = new HashSet<string>(StringComparer.Ordinal);
+            var alvos = new List<AlvoAcesso>();
+
+            var sql = @"SELECT d.id, d.public_key, d.address, d.ConnectionId
+                          FROM ConnectionDevices d
+                         WHERE d.revoked_at IS NULL
+                           AND d.public_key IS NOT NULL";
+
+            using (var cmd = new SqlCommand(sql, conn))
+            using (var reader = cmd.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    var chave = reader.GetString(1);
+                    if (!vistas.Add(chave)) continue;
+
+                    var pasta = PastaDoDevice(reader.GetInt32(0));
+
+                    alvos.Add(new AlvoAcesso
+                    {
+                        Conexao = reader.GetInt32(3),
+                        Chave = chave,
+                        Endereco = reader.IsDBNull(2) ? null : reader.GetString(2),
+                        Pasta = Directory.Exists(pasta) ? pasta : null
+                    });
+                }
+            }
+
+            if (!Directory.Exists(TunnelManager.ClientsDir)) return alvos;
+
+            foreach (var pasta in Directory.GetDirectories(TunnelManager.ClientsDir))
+            {
+                try
+                {
+                    if (Path.GetFileName(pasta).StartsWith("dev_", StringComparison.OrdinalIgnoreCase))
+                        continue;   // ja veio do banco, com dado melhor
+
+                    var ficha = Ficha.Ler(pasta);
+                    if (ficha == null || ficha.Conexao <= 0) continue;
+
+                    var arquivo = Path.Combine(pasta, "client.json");
+                    if (!File.Exists(arquivo)) continue;
+
+                    var cliente = Json.LerObjeto(File.ReadAllText(arquivo));
+
+                    string chave, endereco;
+                    if (!cliente.TryGetValue("publicKey", out chave) || string.IsNullOrWhiteSpace(chave))
+                        continue;
+                    if (!vistas.Add(chave)) continue;
+
+                    cliente.TryGetValue("address", out endereco);
+
+                    alvos.Add(new AlvoAcesso
+                    {
+                        Conexao = ficha.Conexao,
+                        Chave = chave,
+                        Endereco = endereco,
+                        Pasta = pasta
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log.Aviso("pasta " + Path.GetFileName(pasta) + " ilegivel: " + ex.Message);
+                }
+            }
+
+            return alvos;
+        }
+
+        /// <summary>
+        /// Tira do tunel os aparelhos revogados e apaga o que sobrou deles.
+        /// </summary>
+        /// <remarks>
+        /// E DESTRUTIVO e definitivo: alem de remover o peer, apaga a pasta e zera
+        /// public_key, config, qrcode e address. Nao confundir com o corte por
+        /// falta de pagamento (SincronizarBloqueios), que e reversivel — la a chave
+        /// e o IP sao preservados justamente para o .conf do cliente continuar
+        /// valendo quando ele pagar.
+        ///
+        /// Revogacao vem de convite encerrado, nao de cobranca.
+        /// </remarks>
         private void RemoverRevogados(SqlConnection conn)
         {
             var pendentes = new List<Tuple<int, string>>();

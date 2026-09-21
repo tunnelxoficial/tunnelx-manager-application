@@ -244,15 +244,11 @@ namespace tunnelx
                     bool enabled = string.Equals(enabledStr, "true", StringComparison.OrdinalIgnoreCase);
                     if (!string.IsNullOrWhiteSpace(pk) && !string.IsNullOrWhiteSpace(addr))
                     {
-                        if (enabled)
-                        {
-                            TunnelManager.AddPeer(pk, addr);
-                            TunnelManager.UnblockClientInternet(addr);
-                        }
-                        else
-                        {
-                            TunnelManager.BlockClientInternet(addr);
-                        }
+                        // Peer desativado simplesmente NAO entra no tunel — e isso
+                        // que o corte significa. Antes havia aqui uma chamada a
+                        // BlockClientInternet, inerte: o Windows Firewall filtra o
+                        // que termina na maquina e nao alcanca trafego roteado.
+                        if (enabled) TunnelManager.AddPeer(pk, addr);
                     }
                 }
                 UpdateActiveConnections();
@@ -477,7 +473,6 @@ namespace tunnelx
                 try { System.Diagnostics.Process.Start("explorer.exe", clientDir); } catch { }
                 TunnelManager.WriteServerConfFromClients();
                 TunnelManager.AddPeer(clientKeyPair.PublicKey, address);
-                TunnelManager.UnblockClientInternet(address);
                 TunnelManager.ReloadTunnel();
             }
         }
@@ -528,7 +523,6 @@ namespace tunnelx
                     try { System.Diagnostics.Process.Start("explorer.exe", clientDir); } catch { }
                     TunnelManager.WriteServerConfFromClients();
                     TunnelManager.AddPeer(clientKeyPair.PublicKey, address);
-                    TunnelManager.UnblockClientInternet(address);
                     TunnelManager.ReloadTunnel();
                 }
             }
@@ -736,12 +730,38 @@ namespace tunnelx
                 var disable = new ToolStripMenuItem("Desativar conexão");
                 disable.Click += (s, ev) =>
                 {
+                    /*
+                     * O banco PRIMEIRO, e so entao o tunel.
+                     *
+                     * O provisionador reconcilia o tunel contra Connections.internet
+                     * a cada ciclo. Cortar so aqui — no tunel e no disco — seria lido
+                     * como divergencia e DESFEITO em ate ~60 s: o operador veria o
+                     * peer sumir e voltar sozinho, sem explicacao nenhuma.
+                     *
+                     * Gravando antes, mesmo que o corte no tunel falhe, a
+                     * reconciliacao termina o servico no proximo ciclo.
+                     */
+                    var conexaoId = peer.Ficha != null ? peer.Ficha.Conexao : 0;
+
+                    if (!Services.Acesso.Definir(conexaoId, false))
+                    {
+                        MessageBox.Show(
+                            "Não foi possível gravar o corte no banco.\n\n" +
+                            "O peer sai do túnel agora, mas o provisionador vai devolvê-lo " +
+                            "no próximo ciclo, porque o banco continua dizendo que este " +
+                            "cliente tem acesso.\n\nCorte pelo painel, ou verifique a conexão " +
+                            "com o banco.",
+                            "Corte não gravado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+
                     if (!string.IsNullOrEmpty(pk))
                         TunnelManager.RemovePeer(pk);
                     TunnelManager.SetClientEnabledByPublicKey(pk, false);
                     TunnelManager.WriteServerConfFromClients();
-                    if (!string.IsNullOrEmpty(addr))
-                        TunnelManager.BlockClientInternet(addr);
+                    // O corte real e a saida do peer do tunel (RemovePeer, acima). Aqui havia
+                    // uma chamada a BlockClientInternet, que criava regras de firewall do
+                    // Windows — e nunca bloqueou nada: o firewall filtra o que TERMINA na
+                    // maquina, e o trafego do cliente e roteado/NATeado. So acumulava regras.
                     UpdateActiveConnections();
                 };
                 menu.Items.Add(disable);
@@ -751,12 +771,24 @@ namespace tunnelx
                 var enableItem = new ToolStripMenuItem("Ativar conexão");
                 enableItem.Click += (s, ev) =>
                 {
+                    // Mesma razao do corte: sem o banco, a reconciliacao
+                    // tira o peer de novo no ciclo seguinte.
+                    var conexaoId = peer.Ficha != null ? peer.Ficha.Conexao : 0;
+
+                    if (!Services.Acesso.Definir(conexaoId, true))
+                    {
+                        MessageBox.Show(
+                            "Não foi possível gravar a liberação no banco.\n\n" +
+                            "O peer volta ao túnel agora, mas o provisionador vai " +
+                            "removê-lo no próximo ciclo.",
+                            "Liberação não gravada", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+
                     TunnelManager.SetClientEnabledByPublicKey(pk, true);
                     TunnelManager.WriteServerConfFromClients();
                     if (!string.IsNullOrEmpty(pk) && !string.IsNullOrEmpty(addr))
                         TunnelManager.AddPeer(pk, addr);
-                    if (!string.IsNullOrEmpty(addr))
-                        TunnelManager.UnblockClientInternet(addr);
+
                     UpdateActiveConnections();
                 };
                 menu.Items.Add(enableItem);
