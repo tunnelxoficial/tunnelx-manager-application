@@ -66,8 +66,10 @@
       <DependentUpon>Resources.resx</DependentUpon>
     </Compile>
     <Compile Include="Services\DbBackgroundService.cs" />
+    <Compile Include="Services\DeviceProvisioner.cs" />
     <Compile Include="Services\EndpointHelper.cs" />
     <Compile Include="Services\IcsHelper.cs" />
+    <Compile Include="Services\Log.cs" />
     <Compile Include="Services\InternetConnectionSharing.cs" />
     <Compile Include="Services\NetworkHelper.cs" />
     <Compile Include="Services\TunnelManager.cs" />

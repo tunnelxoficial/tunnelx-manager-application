@@ -20,8 +20,24 @@ namespace tunnelx.Services
         public const string ConfDir = @"C:\ProgramData\TunnelX";
         public const string ServerConfPath = @"C:\ProgramData\TunnelX\" + WireGuardInterfaceName + ".conf";
         public const int ListenPort = 51820;
-        public const string SubnetCidr = "10.66.66.0/24";
-        public const string ServerAddress = "10.66.66.1/24";
+
+        /// <summary>
+        /// Faixa do tunel. Era /24 — 253 enderecos no servidor inteiro.
+        ///
+        /// O teto ja era baixo quando cada VENDA consumia um IP. Com um peer por
+        /// APARELHO (a correcao das quedas, ver ConnectionDevice no backend) um
+        /// plano medio de 8 pessoas passa a consumir 8 enderecos, e o mesmo /24
+        /// limitaria o produto a ~31 assinaturas. Ampliar junto nao e opcional:
+        /// sem isso a correcao trocaria uma falha de qualidade por uma falha de
+        /// capacidade que estoura antes.
+        ///
+        /// O IP do servidor NAO muda — continua 10.66.66.1 — so a mascara. Os
+        /// .conf ja distribuidos usam AllowedIPs 0.0.0.0/0 e nao referenciam o
+        /// endereco do servidor, e os 10.66.66.x existentes seguem validos dentro
+        /// de 10.66.0.0/16. A ampliacao e compativel com o que esta no ar.
+        /// </summary>
+        public const string SubnetCidr = "10.66.0.0/16";
+        public const string ServerAddress = "10.66.66.1/16";
         public const string AndroidAddress = "10.66.66.2/32";
         public const int DefaultMtu = 1420;
         public static string ClientsDir => System.IO.Path.Combine(ConfDir, "clients");
@@ -406,29 +422,77 @@ PersistentKeepalive = 15
                         if (idx > 0)
                         {
                             var val = line.Substring(idx + 1).Trim().Trim('"', ',', ' ');
-                            var lastDot = val.LastIndexOf('.');
-                            var lastSlash = val.LastIndexOf('/');
-                            if (lastDot > 0 && lastSlash > lastDot)
+                            /*
+                             * Guarda o endereco como (terceiro * 256 + quarto).
+                             *
+                             * Antes so o ultimo octeto era lido, porque o pool era um
+                             * /24 e os tres primeiros eram fixos. Num /16 o terceiro
+                             * octeto varia, e ignora-lo faria 10.66.1.5 e 10.66.2.5
+                             * contarem como o MESMO endereco — duas pessoas com o mesmo
+                             * IP de tunel, que e exatamente a colisao que esta correcao
+                             * existe para eliminar.
+                             */
+                            var semMascara = val.Split('/')[0].Trim();
+                            var partes = semMascara.Split('.');
+                            if (partes.Length == 4
+                                && int.TryParse(partes[2], out var terceiro)
+                                && int.TryParse(partes[3], out var quarto))
                             {
-                                if (int.TryParse(val.Substring(lastDot + 1, lastSlash - lastDot - 1), out var n))
-                                    used.Add(n);
+                                used.Add(terceiro * 256 + quarto);
                             }
                         }
                     }
                 }
                 catch { }
             }
-            // 10.66.66.1 e o servidor (ServerAddress) e 10.66.66.2 e o peer Android fixo
-            // (AndroidAddress). Nenhum dos dois tem client.json, entao nao aparecem na
-            // varredura acima -- sem isso o PRIMEIRO cliente recebia .2 e colidia.
-            used.Add(1);
-            used.Add(2);
+            // 10.66.66.1 e o servidor (ServerAddress) e 10.66.66.2 e o peer Android
+            // fixo (AndroidAddress). Nenhum dos dois tem client.json, entao nao
+            // aparecem na varredura acima -- sem isso o PRIMEIRO cliente recebia .2
+            // e colidia. Os numeros sao os do terceiro+quarto octeto (66*256+1).
+            used.Add(66 * 256 + 1);
+            used.Add(66 * 256 + 2);
 
-            for (int n = 2; n <= 254; n++)
+            /*
+             * PRIMEIRO esgota 10.66.66.0/24, so depois abre o resto do /16.
+             *
+             * A ordem nao e estetica, e a diferenca entre funcionar hoje e exigir
+             * uma parada. O WireGuard roteia por AllowedIPs, mas quem entrega o
+             * pacote a interface e o SISTEMA, pela rota que a mascara da interface
+             * cria. Enquanto o tunel em execucao estiver de pe como /24, um
+             * 10.66.0.10 nao tem rota: o pacote sai pelo gateway padrao e o cliente
+             * fica "conectado" sem trafego.
+             *
+             * A mascara nova (/16) so vale depois que o servico do tunel for
+             * reinstalado — o que derruba todos os peers de uma vez. Mantendo o /24
+             * como primeira escolha, a ampliacao entra sem parada: os ~250 primeiros
+             * aparelhos continuam na faixa que ja funciona, e quando ela encher o
+             * operador ja tera reiniciado o tunel em alguma manutencao.
+             *
+             * Os .0 e .255 de cada /24 sao pulados: nao ha broadcast num tunel
+             * ponto-a-ponto, mas pilhas e firewalls domesticos tratam .255 de forma
+             * especial, e um endereco que funciona em 99% das redes e pior que um
+             * que funciona em todas — a falha apareceria como "so esse cliente cai".
+             */
+            for (int quarto = 2; quarto <= 254; quarto++)
             {
-                if (!used.Contains(n)) return $"10.66.66.{n}/32";
+                if (!used.Contains(66 * 256 + quarto)) return $"10.66.66.{quarto}/32";
             }
-            throw new InvalidOperationException("Sem endereços disponíveis no pool 10.66.66.0/24.");
+
+            Log.Aviso("pool 10.66.66.0/24 esgotado; alocando no restante do /16. " +
+                      "O tunel PRECISA estar rodando com a mascara /16 (ServerAddress) " +
+                      "para estes enderecos terem rota — reinstale o servico do tunel.");
+
+            for (int n = 2; n <= 65534; n++)
+            {
+                int terceiro = n / 256;
+                int quarto = n % 256;
+                if (terceiro == 66) continue;              // ja varrido acima
+                if (quarto == 0 || quarto == 255) continue;
+                if (used.Contains(n)) continue;
+                return $"10.66.{terceiro}.{quarto}/32";
+            }
+
+            throw new InvalidOperationException("Sem enderecos disponiveis no pool " + SubnetCidr + ".");
         }
 
         public static void WriteServerConfFromClients()
@@ -620,9 +684,28 @@ PersistentKeepalive = 15
             return status.IndexOf("peer: " + publicKey, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        public static void AddPeer(string publicKey, string allowedIps)
+        /// <summary>
+        /// Acrescenta o peer ao tunel em execucao.
+        /// </summary>
+        /// <returns>true somente se o peer estiver de fato no tunel depois.</returns>
+        /// <remarks>
+        /// Antes este metodo era void e engolia toda excecao com um catch vazio,
+        /// sem nunca olhar o ExitCode. O chamador marcava a conexao como CREATED
+        /// de qualquer jeito — entao o cliente aparecia pronto no painel, baixava
+        /// o .conf, e simplesmente nao conectava. Sem log, sem erro, sem pista.
+        ///
+        /// A conferencia final e por PeerExists e nao pelo ExitCode: o wg.exe pode
+        /// sair com 0 e ainda assim nao ter aplicado nada (interface errada, tunel
+        /// parado). O que importa e o estado do tunel, nao o codigo de saida.
+        /// </remarks>
+        public static bool AddPeer(string publicKey, string allowedIps)
         {
-            if (!File.Exists(WgShowExePath)) return;
+            if (!File.Exists(WgShowExePath))
+            {
+                Log.Error($"AddPeer: wg.exe nao encontrado em {WgShowExePath}");
+                return false;
+            }
+
             try
             {
                 var psi = new ProcessStartInfo
@@ -634,17 +717,52 @@ PersistentKeepalive = 15
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
+
                 using (var p = Process.Start(psi))
                 {
+                    var saida = p.StandardOutput.ReadToEnd();
+                    var erro = p.StandardError.ReadToEnd();
                     p.WaitForExit();
+
+                    if (p.ExitCode != 0)
+                    {
+                        Log.Error($"AddPeer: wg saiu com {p.ExitCode}. stderr: {erro?.Trim()} stdout: {saida?.Trim()}");
+                        return false;
+                    }
                 }
+
+                if (!PeerExists(publicKey))
+                {
+                    Log.Error($"AddPeer: wg nao reclamou, mas o peer nao esta no tunel {WireGuardInterfaceName}");
+                    return false;
+                }
+
+                Log.Info($"AddPeer: peer aplicado com allowed-ips {allowedIps}");
+                return true;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error("AddPeer: excecao ao chamar o wg", ex);
+                return false;
+            }
         }
 
-        public static void RemovePeer(string publicKey)
+        /// <summary>
+        /// Remove o peer do tunel em execucao.
+        /// </summary>
+        /// <returns>true se o peer nao estiver mais no tunel.</returns>
+        /// <remarks>
+        /// Falhar aqui em silencio e pior que em AddPeer: o peer removido no banco
+        /// continua valendo no tunel, e o cliente cortado segue navegando.
+        /// </remarks>
+        public static bool RemovePeer(string publicKey)
         {
-            if (!File.Exists(WgShowExePath)) return;
+            if (!File.Exists(WgShowExePath))
+            {
+                Log.Error($"RemovePeer: wg.exe nao encontrado em {WgShowExePath}");
+                return false;
+            }
+
             try
             {
                 var psi = new ProcessStartInfo
@@ -656,12 +774,33 @@ PersistentKeepalive = 15
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
+
                 using (var p = Process.Start(psi))
                 {
+                    var erro = p.StandardError.ReadToEnd();
                     p.WaitForExit();
+
+                    if (p.ExitCode != 0)
+                    {
+                        Log.Error($"RemovePeer: wg saiu com {p.ExitCode}. stderr: {erro?.Trim()}");
+                        return false;
+                    }
                 }
+
+                if (PeerExists(publicKey))
+                {
+                    Log.Error("RemovePeer: o peer CONTINUA no tunel apos a remocao");
+                    return false;
+                }
+
+                Log.Info("RemovePeer: peer removido do tunel");
+                return true;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error("RemovePeer: excecao ao chamar o wg", ex);
+                return false;
+            }
         }
 
         public static void BlockClientInternet(string addressCidr)
